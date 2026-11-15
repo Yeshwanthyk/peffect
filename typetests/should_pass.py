@@ -13,6 +13,8 @@ from peffect import (
     Exit,
     Failure,
     Fiber,
+    Layer,
+    MemoMap,
     Reference,
     Scope,
     ScopeService,
@@ -38,6 +40,7 @@ from peffect import (
     on_exit,
     on_interrupt,
     provide,
+    provide_layer,
     scoped,
     sleep,
     succeed,
@@ -322,3 +325,60 @@ def traversal_types(ids: list[int], names: str) -> None:
         for_each(names, lambda c, i: succeed((c, i)), concurrency=2),
         Effect[list[tuple[str, int]], Never, Never],
     )
+
+
+# Layer[ROut, E, RIn]: built from effects, Scope in an effect's R is the layer's own lifetime and
+# is removed; every other service, and every error, stays. provide removes only what it supplies.
+def layer_types(
+    repo: Repo,
+    users: Layer[Users],
+    db: Layer[Db, Timeout],
+    users_from_db: Layer[Users, NotFound, Db],
+    needs_db_log: Layer[Users, NotFound, Db | Log],
+    mm: MemoMap,
+    scope: ScopeService,
+) -> None:
+    assert_type(Layer.succeed(Users, repo), Layer[Users, Never, Never])
+    assert_type(Layer.effect(Db, slow()), Layer[Db, Timeout, Never])
+    assert_type(
+        Layer.effect(Db, acquire_release(slow(), lambda _n, _ex: sync(lambda: None))),
+        Layer[Db, Timeout, Never],
+    )
+    assert_type(Layer.effect(Users, Db().use().as_(repo)), Layer[Users, Never, Db])
+    assert_type(Layer.effect_context(sync(lambda: Users.context(repo))), Layer[Users, Never, Never])
+    assert_type(Layer.effect_discard(slow()), Layer[Never, Timeout, Never])
+    assert_type(users_from_db.pipe(Layer.provide(db)), Layer[Users, NotFound | Timeout, Never])
+    assert_type(needs_db_log.pipe(Layer.provide(db)), Layer[Users, NotFound | Timeout, Log])
+    assert_type(users.pipe(Layer.merge(db)), Layer[Users | Db, Timeout, Never])
+    assert_type(Layer.merge_all(users), Layer[Users, Never, Never])
+    assert_type(
+        Layer.merge_all(users, db, users_from_db, needs_db_log),
+        Layer[Users | Db, Timeout | NotFound, Db | Log],
+    )
+    assert_type(Layer.build(users_from_db), Effect[Context[Users], NotFound, Db | Scope])
+    assert_type(Layer.build_with_scope(users_from_db, scope), Effect[Context[Users], NotFound, Db])
+    assert_type(
+        Layer.build_with_memo_map(users_from_db, mm, scope), Effect[Context[Users], NotFound, Db]
+    )
+    assert_type(mm.get(users_from_db, scope), Effect[Context[Users], NotFound, Db] | None)
+    assert_type(Layer.make_memo_map(), Effect[MemoMap, Never, Never])
+    assert_type(Layer.fork_memo_map(mm), Effect[MemoMap, Never, Never])
+    assert_type(provide_layer(db)(Db().use()), Effect[int, Timeout, Never])
+    assert_type(
+        provide_layer(users)(Users().use().flat_map(lambda _: Db().use())),
+        Effect[int, Never, Db],
+    )
+
+
+# A layer that provides more stands for one that provides less; E and RIn only widen.
+def needs_users(layer: Layer[Users]) -> Layer[Users]:
+    return layer
+
+
+def tolerates_db(layer: Layer[Users, NotFound, Db]) -> Layer[Users, NotFound, Db]:
+    return layer
+
+
+def layer_variance(users_and_db: Layer[Users | Db], users: Layer[Users]) -> None:
+    assert_type(needs_users(users_and_db), Layer[Users])
+    assert_type(tolerates_db(users), Layer[Users, NotFound, Db])

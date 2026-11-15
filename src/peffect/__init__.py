@@ -55,6 +55,7 @@ from peffect.fiber import (
     run,
     run_exit,
 )
+from peffect.layer import CurrentMemoMap, Layer, MemoMap, provide_layer
 from peffect.resources import acquire_release, acquire_use_release, add_finalizer
 from peffect.scope import Closeable, Scope, ScopeService, scope, scoped
 
@@ -65,6 +66,7 @@ __all__ = [
     "Closeable",
     "Context",
     "ContextMap",
+    "CurrentMemoMap",
     "DefectError",
     "Deferred",
     "Die",
@@ -77,6 +79,8 @@ __all__ = [
     "Fiber",
     "Interrupt",
     "Interrupted",
+    "Layer",
+    "MemoMap",
     "MissingService",
     "Reference",
     "Scope",
@@ -114,6 +118,7 @@ __all__ = [
     "on_exit",
     "on_interrupt",
     "provide",
+    "provide_layer",
     "run",
     "run_exit",
     "scope",

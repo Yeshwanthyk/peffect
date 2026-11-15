@@ -9,6 +9,8 @@ from peffect import (
     Effect,
     Exit,
     Fiber,
+    Layer,
+    MemoMap,
     Reference,
     Scope,
     ScopeService,
@@ -25,6 +27,7 @@ from peffect import (
     fork_daemon,
     gen,
     provide,
+    provide_layer,
     scoped,
     succeed,
     sync,
@@ -291,3 +294,75 @@ _traversal_error_lost: Effect[list[str], Never, Never] = for_each([1], lambda ui
 _traversal_value_lost: Effect[list[int], NotFound, Never] = for_each([1], lambda u, _i: find(u))
 # 53. TRAVERSAL_UNSUPPORTED_CONCURRENCY: only an int or "unbounded"
 for_each([1], lambda u, _i: find(u), concurrency="inherit")
+
+
+class Db(Tag[int]): ...
+
+
+class Timeout(Exception): ...
+
+
+def slow() -> Effect[int, Timeout, Never]:
+    return succeed(1)
+
+
+async def layer_dependencies(
+    users_from_db: Layer[Users, NotFound, Db], db: Layer[Db, Timeout]
+) -> None:
+    # 54. LAYER_DEPENDENCY_MISSING: the layer's own RIn stays in the provided effect
+    await peffect.run(provide_layer(users_from_db)(Users().use()).catch_all(lambda _: succeed(1)))
+    # 55. LAYER_EFFECT_MISSING_ITS_LAYER: providing Db does not satisfy Users
+    await peffect.run(provide_layer(db)(Users().use()).catch_all(lambda _: succeed(1)))
+
+
+def layer_provide_keeps_channels(
+    users_from_db: Layer[Users, NotFound, Db],
+    needs_db_log: Layer[Users, NotFound, Db | Log],
+    db: Layer[Db, Timeout],
+) -> None:
+    # 56. LAYER_PROVIDE_DROPS_UNRELATED: provide removes Db only; Log stays
+    _kept: Layer[Users, NotFound | Timeout, Never] = needs_db_log.pipe(Layer.provide(db))
+    # 57. LAYER_ERROR_LOST: the provider's Timeout joins E
+    _lost: Layer[Users, NotFound, Never] = users_from_db.pipe(Layer.provide(db))
+    # 58. LAYER_PROVIDED_EFFECT_ERROR_LOST: provide_layer adds the layer's E
+    _effect_lost: Effect[int, Never, Never] = provide_layer(db)(Db().use())
+
+
+def layer_services(repo: Repo, users: Layer[Users]) -> None:
+    # 59. LAYER_WRONG_SERVICE: Users holds a Repo
+    Layer.succeed(Users, 1)
+    # 60. LAYER_WRONG_EFFECT_SERVICE: the effect must produce the tag's service
+    Layer.effect(Users, succeed(1))
+    # 61. LAYER_WRONG_OUTPUT: users provides Users, not Log
+    _log: Layer[Log] = users
+    # 62. LAYER_SCOPE_REMOVES_ONLY_SCOPE: the effect's other R survives Scope's removal
+    _db: Layer[Db, Timeout, Never] = Layer.effect(
+        Db,
+        acquire_release(slow(), lambda _n, _ex: succeed(None)).flat_map(
+            lambda n: Users().use().as_(n)
+        ),
+    )
+    # 63. LAYER_BUILD_NEEDS_SCOPE: build ties the layer's resources to the caller's Scope
+    _built: Effect[Context[Users], Never, Never] = Layer.build(users)
+
+
+def layer_aliases(
+    users: Layer[Users], failing: Layer[Users, NotFound], needy: Layer[Users, Never, Db]
+) -> None:
+    # 64. LAYER_OUTPUT_WIDENED_BY_ALIAS: a Users layer cannot stand for one that also provides Db
+    _more: Layer[Users | Db] = users
+    # 65. LAYER_ERROR_NARROWED_BY_ALIAS: E is not erased by assignment
+    _safe: Layer[Users] = failing
+    # 66. LAYER_DEPENDENCY_NARROWED_BY_ALIAS: RIn is not erased by assignment
+    _free: Layer[Users] = needy
+
+
+def layer_construction(repo: Repo, users: Layer[Users], mm: MemoMap, scope: ScopeService) -> None:
+    # 67. LAYER_CONSTRUCTOR_FORGED: only Layer's own constructors can make one
+    Layer(lambda _m, _s: succeed(Users.context(repo)), object())
+    # 68. LAYER_BUILDER_REPLACED: a built layer's builder is fixed
+    users._builder = lambda _m, _s: succeed(Users.context(repo))
+    # 69. MERGE_ALL_EMPTY: upstream mergeAll takes at least one layer
+    Layer.merge_all()
+    # 70. MEMO_GET_WRONG_OUTPUT: get keeps the layer's ROut
+    _got: Effect[Context[Log], Never, Never] | None = mm.get(users, scope)

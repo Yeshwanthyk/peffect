@@ -118,6 +118,19 @@ an AGENTS.md section with the idiom and the mistakes it prevents.
   concurrency yet. Independently verified by Sol 6.1 after ordered-worker and primitive cancellation
   corrections; 185 tests pass excluding TestClock. Not formally modeled.
 
+- Layer (2026-11-15): implemented and independently verified by Sol 6.1.
+  - `layer.py`: `Layer[ROut, E, RIn]` (token-only constructor, `Final` builder), `MemoMap`,
+    `CurrentMemoMap` and `provide_layer`.
+  - Constructors: `effect`, `succeed`, `effect_context`, `effect_discard`, `from_build`.
+  - Composition: `merge_all` (typed for 1–4 layers), and data-last `merge` and `provide`.
+  - Builds: `build`, `build_with_scope`, `build_with_memo_map`; memo maps through
+    `make_memo_map(_unsafe)` and `fork_memo_map(_unsafe)`.
+  - 11 Layer.test.ts ports and 5 source-derived cases pass (21 test cases), along with
+    typetests (should_fail 54–70) and three mutations.
+  - Not yet ported: `Layer.fresh`, suspend, recovery, tracing and ManagedRuntime.
+  - Open parity gap: Context keys are classes, not strings.
+  - Not formally modeled.
+
 ## Order and why
 
 - Context/Clock/Scope come before concurrency: `timeout` needs Clock (else it is untestable

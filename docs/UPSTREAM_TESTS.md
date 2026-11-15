@@ -103,7 +103,7 @@ Decisions already made for these batches:
 Deferred elsewhere in these upstream files:
 - TestClock warning tests: they need TestConsole.
 - The timeout variant of the cancelled-deadline test: tier 3.
-- Layer tests: tier 4.
+- Layer tests: see the Layer section below.
 - `MaxOpsBeforeYield`: no scheduler hook.
 - The `updateServiceScoped` reset option: no such option yet.
 
@@ -218,3 +218,39 @@ from a looked-up accessor to the public import with every test body AST-identica
 `discard`. Independent review corrections preserve worker insertion order and combine the
 original interrupt before elected cancellation failures; upstream runtime replay and focused
 recheck passed. Traversal is not formally modeled.
+
+## Layer — `tests/test_layer_upstream.py`
+
+`Layer.test.ts` ports:
+- :15 parallel acquisition and :35 sharing with merge.
+- :512 identity memoization, blocks 1–2. Block 3 needs `Layer.fresh`.
+- :557 interrupted build, and :583 interrupted reuse.
+- :606 and :624 for get effects.
+- :638 no memoization before execution.
+- :673 and :693 across builds.
+- :712 forked memo maps. Its type-id read becomes `isinstance(child, MemoMap)`.
+
+Five labelled source-derived cases cover:
+- a build on a closed scope is unshared;
+- `get` takes ownership when it is called;
+- a nested build forks `CurrentMemoMap`;
+- with no current map, each build gets a fresh one;
+- `provide_layer`'s scope lifecycle.
+
+Harness adaptations, written in the module docstring:
+- `Counter` replaces Ref.
+- Deferred gates replace Latch.
+- The `MaxOpsBeforeYield` sweep becomes named interrupt points. This is partial coverage.
+- Awaiting under a watchdog replaces settle + `pollUnsafe`.
+
+Status: independently verified by Sol 6.1. 21 cases pass: the red commit's 15, :712,
+and the 5 source cases. The full verifier reports 208 passed and 16 pending TestClock failures.
+
+The red commit's dynamic `_layer(...)` wrappers were migrated to typed calls; `merge` and
+`provide` are data-last (`self.pipe(Layer.provide(that))`). No assertion changed.
+
+One test-port mistake was found and corrected, with the source cited: in :557 "parked-in-build",
+every build attempt parked behind the gate. Upstream's `fromBuildMemo` observes on the scope that
+`fromBuild` forked and closes it on failure (Layer.ts:360-372), so once both early requesters
+fail the entry is dropped and the later requester rebuilds. Upstream's value is
+`Effect.succeed`, so that rebuild does not park. Now only the first attempt parks.

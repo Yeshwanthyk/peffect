@@ -248,6 +248,41 @@ waits for cleanup itself, matching upstream rather than relying on caller superv
 Traversal and cancellation cause semantics are not formally modeled; the kernel protocol is
 unchanged.
 
+## Layer
+
+`src/peffect/layer.py`, outside the kernel: it composes `suspend`, `on_exit`, `WithFiber` (to read
+`fiber.context`), `for_each`, `provide`, Deferred and the public Scope API, including
+`Scope.add_finalizer_unsafe` (B1–B3). Upstream: `Layer.ts:240-420` (MemoMap, memoMapObserve,
+fromBuild, fromBuildMemo), `:600-781` (CurrentMemoMap, buildWithMemoMap, build, buildWithScope),
+mergeAll, provide, and `internal/layer.ts:8-22` (Effect.provide with a layer). Implemented
+and independently verified by Sol 6.1.
+
+| # | Invariant | Enforced by | Pinned by |
+|---|---|---|---|
+| L1 | **One build per layer object per MemoMap.** Memoized layers key the map by identity; a request during a build waits for the first builder's result. | `Layer._from_build_memo` (self-keyed), `MemoMap.get_or_else_memoize` | :35, :512, :673, :693, :712; identity mutation (13 cases red) |
+| L2 | **A requester's scope owns a share from the moment `get` is called**, whether or not the returned effect runs: count and finalizer registration happen together, synchronously. A closed scope owns nothing: the build runs unshared and stores no entry. | `_observe` called inside `MemoMap.get` and before the entry is stored | :606, :624, `test_source_get_takes_ownership_when_called_not_when_run`, `test_source_a_build_on_a_closed_scope_is_unshared_and_released_at_once`; lazy-observer mutation (only the source test red) |
+| L3 | **The last observer to close releases.** Each observing scope's finalizer decrements; at zero the entry leaves the map and its scope closes with that scope's Exit. | `_Entry.finalizer` | :583, :673, :693, closed-scope source test |
+| L4 | **The first builder publishes its Exit however the build ends**, interruption included, so no waiter or later requester hangs. A failed build closes the layer scope `from_build` forked, which drops that requester's share. | `on_exit(publish)` in `get_or_else_memoize`; `from_build`'s close-on-failure | :557 at three interrupt points; publication mutation (12 cases red) |
+| L5 | **Nothing is memoized before the build effect runs.** | all map writes happen inside `suspend` | :638 |
+| L6 | **Nested builds share the current map.** `build_with_memo_map` provides `CurrentMemoMap` while building and adds it to the built Context; `build` and `build_with_scope` fork the current map, or make a fresh one when there is none. A forked map reads its parent but never writes to it. | `build_with_memo_map`, `CurrentMemoMap.fork_or_create`, `MemoMap.get` parent fallback | :712, `test_source_a_nested_build_forks_the_current_memo_map`, `test_source_without_a_current_memo_map_each_build_gets_a_fresh_one` |
+| L7 | **`merge_all` builds its layers concurrently**, each in a sequential child of one parallel scope. | `merge_all` (`for_each`, `concurrency=len(layers)`) | :15 |
+| L8 | **`provide_layer(layer)(program)` scopes the layer to the program.** A fresh scope that is not put in the context, closed with the program's Exit; the built Context (including `CurrentMemoMap`) is provided. | `provide_layer.__call__` (scopedWith, effect.ts:4231) | `test_source_provide_layer_scopes_the_layer_to_the_effect` |
+| L9 | **`Layer[ROut, E, RIn]` keeps every channel honest.** ROut is contravariant and E and RIn are covariant (inferred, as upstream's `in ROut, out E, out RIn`). Constructors remove only Scope from an effect's R; `provide` removes only what the provider supplies and adds its E; `build` adds Scope; a wrong service or tag is rejected. Only Layer's constructors make a Layer (private token), and its builder is `Final`. | PEP 695 variance, overloads, `_Token`, `Final` | should_pass `layer_types`, `layer_variance`; should_fail 54–70 |
+
+**Limits.**
+- Context keys are tag classes, not upstream's strings (UPSTREAM_TESTS D1). This gap stays
+  visible here and must be closed before Layer can claim full parity.
+- `Final` on `_builder` is enforced by the type checker only, since a slot can still be assigned
+  at runtime. The constructor token is also checked at runtime.
+- `merge_all` is typed for 1 to 4 layers; zero layers, or five or more, are a type error.
+  Pyright loses a union whose members all solve to `Never` (`resources.py:70`), so each arity
+  covers the all-`Never` E and R channels before the general overload.
+- Not ported: `Layer.fresh`, `suspend`, recovery, tracing, `provide`'s `local` option, and
+  ManagedRuntime.
+- The :557/:583 op-budget sweep is reduced to named interrupt points, so this is partial
+  coverage.
+- Layer is not in the formal model, and the kernel is unchanged.
+
 ## Kernel boundary
 
 Only the kernel (`src/peffect/core.py`, `fiber.py`, `cause.py`, `__init__.py`) knows about fibers
