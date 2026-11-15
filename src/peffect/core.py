@@ -42,8 +42,8 @@ R_co = TypeVar("R_co", covariant=True)
 
 type AnyEffect = Effect[Any, Any, Any]
 type AnyFiber = Fiber[Any, Any]
-type ContextMap = Mapping[object, Any]
-"""A fiber's services, keyed by tag class. Read-only: update_context installs a fresh copy."""
+type ContextMap = Mapping[str, Any]
+"""A fiber's services, keyed by tag key string. Read-only: update_context installs a fresh copy."""
 
 EMPTY_CONTEXT: ContextMap = MappingProxyType({})
 

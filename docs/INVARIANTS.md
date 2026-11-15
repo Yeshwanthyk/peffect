@@ -96,12 +96,13 @@ services; `context.py` (Tag, Reference, Context, `provide`) is built on them and
 | C1 | **Restored on every exit.** After `update_context(eff, f)` ends (success, failure, defect, interrupt while parked), the fiber's context is the one from before. | `RestoreContext.on_any` (`_pop` runs `on_any` on every popped frame, including skipped ones) | `test_restored_after_success_failure_and_defect`, `test_nested_provide_layers_and_unwinds`, `test_restored_when_interrupted_while_parked_inside` |
 | C2 | **No window.** The swap and the restore frame push happen in one `WithFiber` callback, so no interrupt lands between them; if `f` raises, nothing changed. | `update_context.go` | `test_interrupt_at_install_still_restores` (the interrupt is requested inside `f`, and the test checks the new map was installed and the body never ran), `test_raising_update_changes_nothing` |
 | C3 | **Owned snapshot.** The fiber holds a read-only copy: later writes to the caller's mapping don't show, and the fiber's map, its `context` attribute and its deletion all refuse writes. A forked child starts with the parent's map at fork time and can't change the parent's. | `MappingProxyType(dict(...))` in `update_context`; `Fiber.context` property; `fork` passes `p.context` | `test_fiber_context_is_read_only_and_owned`, `test_child_inherits_context_at_fork_and_cannot_leak_back`, `test_root_starts_empty`; should_fail 12–14 |
-| C4 | **Reference default: once per class, lazy.** Built on first unprovided use, cached in that class's own `__dict__` (never inherited), shared by every fiber and root; an override never builds it. | `Reference._find` | `test_reference_default_built_once_across_roots_and_override_restores` |
+| C4 | **Reference default: once per declaration, lazy.** Built on first unprovided use, cached in that class's own `__dict__` (never inherited), shared by every fiber and root; an override never builds it. | `Reference._find` | `test_reference_default_built_once_across_roots_and_override_restores`, `test_reference_defaults_are_per_declaration_despite_one_key` |
 | C5 | **A raising default is a defect and is not cached**; the next use calls it again. | `Reference._find` (the raise escapes before the cache write; `WithFiber` turns it into a defect) | `test_failed_default_is_a_defect_and_not_kept` |
-| C6 | **Concrete tags are final.** Lookup is by exact class, and R is covariant, so a parent-tag context would type-check against a child-tag request it can't answer. Subclassing any tag other than `Tag`/`Reference` raises `TypeError`; `Tag`/`Reference` themselves build no context. | `Tag.__init_subclass__`, `Tag.context` | `test_concrete_tags_cannot_be_subclassed`, `test_base_tags_build_no_context` |
+| C6 | **Concrete tags are final.** R is covariant, so a parent-tag context would type-check against a child-tag request (under another key) it can't answer. Subclassing any tag other than `Tag`/`Reference` raises `TypeError`; `Tag`/`Reference` themselves build no context. | `Tag.__init_subclass__`, `Tag.context` | `test_concrete_tags_cannot_be_subclassed`, `test_base_tags_build_no_context` |
 | C7 | **A `Context[T]` holds a service for every tag in T.** No public constructor (a private token); built only by `Tag.context` and `\|` (right side wins); its `services` view is read-only. Contravariant in T. | `Context.__init__`, `Context.__or__` | `test_context_has_no_public_constructor_and_merges_right_wins`, `test_merged_context_right_side_wins_at_runtime`; should_fail 10–11 |
-| C8 | **A missing service is a `MissingService` defect**, never `None`. With C7 and the R typing, only an `update_context` that drops services can reach it. | `Tag._find` | `test_missing_service_is_a_defect` |
+| C8 | **A missing service is a `MissingService` defect**, never `None`, with upstream's message `Service not found: <key>` (Context.ts:1098-1101). With C7 and the R typing, only an `update_context` that drops services can reach it. | `Tag._find` | `test_missing_service_is_a_defect`, `test_missing_service_reports_its_key` |
 | C9 | **Empty identity and Context comparison.** `Context.empty()` is one shared instance; `a \| empty` and `empty \| a` return `a` itself. Two Contexts are `==` when they have the same keys and each value matches by identity, NaN equality, recursive list/tuple/dict comparison (cycles allowed), or Python object equality, in any order; anything that is not a Context is unequal; the hash is the size (Context.ts:637-649, 744-745, 1192-1193). | `Context.empty`, `Context.__or__`, `Context.__eq__`, `Context.__hash__` | `tests/test_context_upstream.py`: `test_supports_equality`, `test_merges_with_right_bias_and_preserves_empty_operand_identity`, `test_preserves_insertion_order_for_replacements_and_appends` |
+| C10 | **The explicit key string is the identity** (Context.ts:256-262, 546). Each concrete tag declares `key=` (a `str`, no derived default; else `TypeError`). Contexts and fiber maps are keyed by it; two declarations with one key read, replace in place (first position kept, right side wins) and compare equal, as upstream. Internal keys are upstream's: `effect/Scope`, `effect/Clock`, `effect/Layer/CurrentMemoMap`. | `Tag.__init_subclass__`, `Tag.context`, `Tag._find`, `Reference._find` | `tests/test_context_identity_upstream.py` |
 
 **R typing** (`provide`, two overloads, exact match first). Python has no `Exclude`, so:
 
@@ -114,8 +115,10 @@ services; `context.py` (Tag, Reference, Context, `provide`) is built on them and
 | still non-empty at `run` / `run_exit` | type error | should_fail 5–7 |
 | wrong service type, wrong Reference override, context claiming more than it holds, forged `Context` | type error | should_fail 8–11 |
 
-**Limits.** Finality (C6) is a runtime check: pyright accepts `class Admins(Users)` and only
-the class statement raises. `Tag[str].context(...)` type-checks and raises at runtime. Overloads
+**Limits.** Finality (C6) and a missing or non-`str` key (C10) are runtime checks: pyright
+accepts `class Admins(Users)` and `class Users(Tag[Repo])`; only the class statement raises.
+Pyright keeps two same-key declarations distinct in R, while at runtime they are one slot, as
+upstream; unique keys are the caller's job. `Tag[str].context(...)` type-checks and raises at runtime. Overloads
 are checked with pyright only, not mypy. Providing a Reference override leaves R unchanged
 (should_pass, `Level`).
 
@@ -123,7 +126,9 @@ are checked with pyright only, not mypy. Providing a Reference override leaves R
 (6 tests red), swap and frame push in two steps (interrupt-at-install red), no snapshot copy
 (read-only test red), fork drops the context (2), no default cache (2), subclassing allowed (1),
 merge with left side winning (2), public `Context` constructor (1), a miss returns `None` (1); the
-partial overload returning `Never` turns `test_types` red.
+partial overload returning `Never` turns `test_types` red. Key identity (2026-11-15, scratch copy):
+a replaced key moving to the end (5 red), left side winning (13), default cache per key instead of
+per declaration (2).
 
 **Not in the formal model.** `verify-formal-kernel` does not model context. C1–C8 rest on the
 tests above. Its SKILL.md argues why the model's pass still holds with `RestoreContext` added: the
@@ -270,8 +275,6 @@ and independently verified by Sol 6.1.
 | L9 | **`Layer[ROut, E, RIn]` keeps every channel honest.** ROut is contravariant and E and RIn are covariant (inferred, as upstream's `in ROut, out E, out RIn`). Constructors remove only Scope from an effect's R; `provide` removes only what the provider supplies and adds its E; `build` adds Scope; a wrong service or tag is rejected. Only Layer's constructors make a Layer (private token), and its builder is `Final`. | PEP 695 variance, overloads, `_Token`, `Final` | should_pass `layer_types`, `layer_variance`; should_fail 54–70 |
 
 **Limits.**
-- Context keys are tag classes, not upstream's strings (UPSTREAM_TESTS D1). This gap stays
-  visible here and must be closed before Layer can claim full parity.
 - `Final` on `_builder` is enforced by the type checker only, since a slot can still be assigned
   at runtime. The constructor token is also checked at runtime.
 - `merge_all` is typed for 1 to 4 layers; zero layers, or five or more, are a type error.

@@ -34,8 +34,8 @@ change that needs a matching update to INVARIANTS B1–B3.
 ## Services (Context, Tag, Reference, provide)
 
 ```python
-class Users(Tag[UserRepo]): ...            # one class per service; it is the lookup key
-class Level(Reference[str]):               # a service with a default: never adds to R
+class Users(Tag[UserRepo], key="app/Users"): ...  # one class per service, keyed by its string
+class Level(Reference[str], key="app/Level"):     # a service with a default: never adds to R
     @classmethod
     def default(cls) -> str: return "info"
 
@@ -45,13 +45,15 @@ await run(provide(Users.context(repo) | Level.context("debug"))(program()))
 
 Mistakes this prevents (rows C1–C8 in `docs/INVARIANTS.md`):
 
-- Subclassing a concrete tag (`class Admins(Users)`) raises: lookup is by exact class, so a
-  `Users` service could never answer an `Admins` request that the types would accept.
+- Every tag declares an explicit, unique `key=` (no default). Two declarations with one key are
+  one service at runtime, as upstream; raw context maps are keyed by `Users.key`, not the class.
+- Subclassing a concrete tag (`class Admins(Users)`) raises: a `Users` service could never
+  answer an `Admins` request that the types would accept.
 - `Context(...)` can't be built directly; only `Tag.context` and `|` make one, so a
   `Context[Users]` always holds a Users service. On `|`, the right side wins.
 - Don't widen R to make a call type-check, or `cast` it away. `provide` removes a tag only when
   R names it; a generic `R` is kept, which is correct, not a bug to work around.
-- A Reference default is built once per class and shared by every run. Make it a value, not
+- A Reference default is built once per declaration (not per key) and shared by every run. Make it a value, not
   per-run state; give per-run state its own `provide`.
 - To change the context, use `provide` or `update_context`: both put the old one back however
   the effect ends, including an interrupt.

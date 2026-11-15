@@ -265,7 +265,7 @@ class Layer[ROut, E = Never, RIn = Never]:
         """Resources live as long as the caller's Scope."""
 
         def start(context: ContextMap) -> Effect[Context[O], E2, R]:
-            scope: ScopeService = context[Scope]
+            scope: ScopeService = context[Scope.key]
             return Layer.build_with_memo_map(layer, CurrentMemoMap.fork_or_create(context), scope)
 
         return WithFiber(lambda fiber: start(fiber.context))
@@ -416,12 +416,12 @@ class MemoMap:
         return suspend(start)
 
 
-class CurrentMemoMap(Tag[MemoMap]):
+class CurrentMemoMap(Tag[MemoMap], key="effect/Layer/CurrentMemoMap"):
     """The MemoMap of the build in progress; nested builds fork it (Layer.ts:600-604)."""
 
     @staticmethod
     def fork_or_create(context: ContextMap) -> MemoMap:
-        current = context.get(CurrentMemoMap)
+        current = context.get(CurrentMemoMap.key)
         return MemoMap(current if isinstance(current, MemoMap) else None)
 
 

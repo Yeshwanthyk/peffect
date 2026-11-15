@@ -87,22 +87,22 @@ class Service2:
         return succeed(2)
 
 
-class Service1Tag(Tag[Service1]): ...
+class Service1Tag(Tag[Service1], key="Service1"): ...
 
 
-class Service2Tag(Tag[Service2]): ...
+class Service2Tag(Tag[Service2], key="Service2"): ...
 
 
-class BoolTag(Tag[bool]): ...
+class BoolTag(Tag[bool], key="boolean"): ...
 
 
-class Probe(Tag[str]): ...
+class Probe(Tag[str], key="Probe"): ...
 
 
-class Dep(Tag[int]): ...
+class Dep(Tag[int], key="Dep"): ...
 
 
-class Shared(Tag[dict[str, int]]): ...
+class Shared(Tag[dict[str, int]], key="Shared"): ...
 
 
 class Counter:
@@ -425,7 +425,7 @@ async def test_source_a_build_on_a_closed_scope_is_unshared_and_released_at_once
         closed = yield from Scope.make()
         yield from Scope.close(closed, VOID)
         ctx = yield from Layer.build_with_memo_map(layer, memo_map, closed)
-        assert ctx.services[Shared] == {"n": 1}
+        assert ctx.services[Shared.key] == {"n": 1}
         assert (acquired.n, released.n, len(memo_map.map)) == (1, 1, 0)
 
         scope1 = yield from Scope.make()
@@ -477,7 +477,7 @@ async def test_source_a_nested_build_forks_the_current_memo_map():
         scope = yield from Scope.make()
         yield from Layer.build_with_memo_map(shared, memo_map, scope)
         ctx = yield from Layer.build_with_memo_map(nested, memo_map, scope)
-        assert ctx.services[CurrentMemoMap] is memo_map
+        assert ctx.services[CurrentMemoMap.key] is memo_map
         yield from Scope.close(scope, VOID)
 
     await run_guarded(program())
@@ -511,7 +511,7 @@ async def test_source_provide_layer_scopes_the_layer_to_the_effect():
 
     def inside(_s: Service1) -> Effect[None, Never, Never]:
         def look(fiber: Any) -> Effect[None, Never, Never]:
-            seen.append(Scope in fiber.context)
+            seen.append(Scope.key in fiber.context)
             return succeed(None)
 
         return WithFiber(look).flat_map(

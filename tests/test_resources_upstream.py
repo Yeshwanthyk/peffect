@@ -76,7 +76,7 @@ EXAMPLE = Boom("Oh noes!")  # upstream ExampleError, Effect.test.ts:3154
 VOID: Effect[None, Never, Never] = succeed(None)
 
 
-class ATag(Tag[str]): ...
+class ATag(Tag[str], key="ATag"): ...
 
 
 def has_interrupts(ex: Exit[Any, Any] | None) -> bool:

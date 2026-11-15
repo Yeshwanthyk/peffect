@@ -231,3 +231,13 @@ async def test_internal_services_use_upstream_keys():
     found, by_class = await run(scoped(WithFiber(raw)))
     assert found is not None and not by_class
     assert list(Scope.context(found).services) == ["effect/Scope"]
+
+
+def test_missing_service_with_empty_key_has_no_suffix():
+    """Source-derived: Context.ts serviceNotFoundError omits an empty key."""
+
+    class Empty(Tag[int], key=""): ...
+
+    defect = MissingService(Empty)
+    assert str(defect) == "Service not found"
+    assert defect.tag is Empty

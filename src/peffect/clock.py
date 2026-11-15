@@ -100,7 +100,7 @@ class _LiveClock:
         return async_(register)
 
 
-class Clock(Reference[ClockService]):
+class Clock(Reference[ClockService], key="effect/Clock"):  # internal/effect.ts:6395
     """The fiber's Clock. ``yield from Clock()`` gives the service; the default is the live one."""
 
     @classmethod

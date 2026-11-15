@@ -204,7 +204,7 @@ def _void_if_none(eff: Effect[Any, Never, Never] | None) -> Effect[Any, Never, N
 # -- the API (Scope.ts) ---------------------------------------------------------------------------
 
 
-class Scope(Tag[ScopeService]):
+class Scope(Tag[ScopeService], key="effect/Scope"):  # internal/effect.ts:4030
     """The Scope service (scopeTag), and the Scope module's functions."""
 
     __slots__ = ()
@@ -314,7 +314,7 @@ def scoped(eff: Effect[Any, Any, Any]) -> Effect[Any, Any, Any]:
     def install() -> Effect[Any, Any, Any]:
         s = Scope.make_unsafe()
         return on_exit(lambda ex: _void_if_none(Scope.close_unsafe(s, ex)))(
-            update_context(eff, lambda old: {**old, Scope: s})
+            update_context(eff, lambda old: {**old, Scope.key: s})
         )
 
     return suspend(install)

@@ -16,7 +16,7 @@ Status values:
 
 | # | Upstream | peffect | Effect on the tests |
 |---|---|---|---|
-| D1 | A service key is a string (`Context.Service("ContextTest/A")`) | The key is the tag class | Order assertions compare classes |
+| D1 | A service key is a string (`Context.Service("ContextTest/A")`) | Closed: `class A(Tag[int], key="ContextTest/A")`; the key string is the identity | Order assertions compare `A.key` |
 | D2 | `Scope` strategy `"sequential"` (default) or `"parallel"` | Both | Parallel cases are batch G; its Scope.test.ts ports pass |
 | D3 | `Context.makeUnsafe(map)` keeps the caller's map | The map is copied on install | That case is not ported |
 | D4 | Interrupt-at-install forced by a custom `Scheduler.shouldYield` | No scheduler hook: the interrupt is requested inside the `update_context` merge, at the same point | Same scenario and assertion (`observed is original`) |
@@ -41,6 +41,12 @@ Status values:
 Equality follows `Context.ts:637-649`, not dict equality: both sides must be Contexts, same size, same keys, value comparison in any order; the hash is the size. A plain mapping with the same items is not equal.
 
 Deferred from `Context.test.ts`: `toJSON`, Redactable, `pick` / `omit` / `addOrOmit` (no such API yet), the `makeUnsafe`-retains-map case (D3), and tests of upstream internals. The pure getters (`getOption`, `getUnsafe`, `get`) have no peffect counterpart; membership in `services` and a lookup inside `provide` assert the same facts.
+
+Key identity: `tests/test_context_identity_upstream.py` repeats the applicable Context.test.ts
+ports above (:17, :31, :104, :278, :292, :304, :332) asserting string keys, and adds source-derived
+cases: same-key collision (Context.ts:546, 1192), per-declaration Reference defaults
+(:1089-1096), the missing-key message (:1098-1101), and upstream's internal keys
+(internal/effect.ts:4030, :6395; Layer.ts:600). All green.
 
 ## Batch B: kernel finalization — `tests/test_finalization_upstream.py`
 

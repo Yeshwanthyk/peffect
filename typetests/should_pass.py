@@ -1,5 +1,6 @@
 """Kernel types pyright must infer. Checked by tests/test_types.py."""
 
+from collections.abc import Mapping
 from typing import Any, Never, assert_type
 
 from peffect import (
@@ -128,16 +129,16 @@ class Repo: ...
 class Logger: ...
 
 
-class Users(Tag[Repo]): ...
+class Users(Tag[Repo], key="typetests/Users"): ...
 
 
-class Log(Tag[Logger]): ...
+class Log(Tag[Logger], key="typetests/Log"): ...
 
 
-class Db(Tag[int]): ...
+class Db(Tag[int], key="typetests/Db"): ...
 
 
-class Level(Reference[str]):
+class Level(Reference[str], key="typetests/Level"):
     @classmethod
     def default(cls) -> str:
         return "info"
@@ -159,6 +160,8 @@ assert_type(one_left, Effect[Pair, Never, Log])  # partial
 assert_type(provide(Log.context(Logger()))(one_left), Effect[Pair, Never, Never])  # 2 -> 1 -> 0
 full = Users.context(Repo()) | Log.context(Logger())
 assert_type(full, Context[Users | Log])
+assert_type(Users.key, str)  # the key string is the runtime identity
+assert_type(full.services, Mapping[str, Any])
 assert_type(Context.empty() | full, Context[Users | Log])  # empty adds no tag
 assert_type(provide(full)(needs_two()), Effect[Pair, Never, Never])  # full
 assert_type(provide(full | Db.context(1))(needs_two()), Effect[Pair, Never, Never])  # more

@@ -3,9 +3,9 @@
 the departures and the tests not ported are in docs/UPSTREAM_TESTS.md.
 
 Adaptations used throughout:
-- A service key is the tag class, not a string (`Context.Service<number>("ContextTest/A")`
-  becomes `class A(Tag[int])`). Upstream's `[...context.mapUnsafe]` (key, value) pairs become
-  `list(ctx.services.items())`, with classes as keys.
+- A service is a tag class with upstream's key string (`Context.Service<number>("ContextTest/A")`
+  becomes `class A(Tag[int], key="ContextTest/A")`). Upstream's `[...context.mapUnsafe]`
+  (key, value) pairs become `list(ctx.services.items())`, keyed by `A.key`.
 - `Context.make(A, 1)` is `A.context(1)`; `Context.add(ctx, B, 2)` and `Context.merge` are
   `ctx | B.context(2)`.
 - `Context.empty()` is `Context.empty()`.
@@ -30,13 +30,13 @@ from peffect import (
 from peffect.core import AnyFiber, WithFiber
 
 
-class A(Tag[int]): ...
+class A(Tag[int], key="ContextTest/A"): ...
 
 
-class B(Tag[int]): ...
+class B(Tag[int], key="ContextTest/B"): ...
 
 
-class C(Tag[int]): ...
+class C(Tag[int], key="ContextTest/C"): ...
 
 
 # -- Context.test.ts ------------------------------------------------------------------------------
@@ -47,14 +47,14 @@ def test_keeps_the_source_immutable_across_additions():
     source = A.context(1)
     result = source | B.context(2)
 
-    assert list(source.services.items()) == [(A, 1)]
-    assert list(result.services.items()) == [(A, 1), (B, 2)]
+    assert list(source.services.items()) == [(A.key, 1)]
+    assert list(result.services.items()) == [(A.key, 1), (B.key, 2)]
 
 
 def test_preserves_insertion_order_for_replacements_and_appends():
     """Context.test.ts:31 "preserves Map insertion order for replacements and appends"."""
 
-    class Ref(Reference[int]):
+    class Ref(Reference[int], key="ContextTest/OrderRef"):
         @classmethod
         def default(cls) -> int:
             return 0
@@ -63,7 +63,7 @@ def test_preserves_insertion_order_for_replacements_and_appends():
         Context.empty() | A.context(1) | Ref.context(2) | B.context(3) | A.context(4) | C.context(5)
     )
 
-    assert list(context.services.items()) == [(A, 4), (Ref, 2), (B, 3), (C, 5)]
+    assert list(context.services.items()) == [(A.key, 4), (Ref.key, 2), (B.key, 3), (C.key, 5)]
 
 
 async def test_distinguishes_an_undefined_service_from_an_absent_service():
@@ -73,21 +73,21 @@ async def test_distinguishes_an_undefined_service_from_an_absent_service():
     get) have no peffect equivalent; membership in `services` and a lookup inside `provide`
     say the same things. The `Context.pick` lines are not ported (no pick API)."""
 
-    class Undefined(Tag[int | None]): ...
+    class Undefined(Tag[int | None], key="ContextTest/Undefined"): ...
 
-    class Missing(Tag[None]): ...
+    class Missing(Tag[None], key="ContextTest/Missing"): ...
 
-    class Ref(Reference[str | None]):
+    class Ref(Reference[str | None], key="ContextTest/UndefinedRef"):
         @classmethod
         def default(cls) -> str | None:
             return "default"
 
     context = Undefined.context(1) | Undefined.context(None) | Ref.context(None)
 
-    assert Undefined in context.services  # getOption(Undefined) is Some
-    assert Missing not in context.services  # getOption(Missing) is None
-    assert context.services[Undefined] is None  # getUnsafe / getOrElse give undefined
-    assert Ref in context.services and context.services[Ref] is None  # Some(undefined)
+    assert Undefined.key in context.services  # getOption(Undefined) is Some
+    assert Missing.key not in context.services  # getOption(Missing) is None
+    assert context.services[Undefined.key] is None  # getUnsafe / getOrElse give undefined
+    assert Ref.key in context.services and context.services[Ref.key] is None  # Some(undefined)
     assert await run(provide(context)(Undefined().use())) is None
     assert await run(provide(context)(Ref().use())) is None  # get(Ref): not the default
     missing = await run_exit(
@@ -103,12 +103,12 @@ def test_supports_the_readonly_map_surface_through_services():
     visited = [(key, value) for key, value in context.services.items()]  # forEach
 
     assert len(context.services) == 2
-    assert A in context.services
-    assert context.services.get(B) == 2
-    assert list(context.services.keys()) == [A, B]
+    assert A.key in context.services
+    assert context.services.get(B.key) == 2
+    assert list(context.services.keys()) == [A.key, B.key]
     assert list(context.services.values()) == [1, 2]
-    assert list(context.services.items()) == [(A, 1), (B, 2)]
-    assert visited == [(A, 1), (B, 2)]
+    assert list(context.services.items()) == [(A.key, 1), (B.key, 2)]
+    assert visited == [(A.key, 1), (B.key, 2)]
 
 
 def test_supports_equality():
@@ -126,7 +126,7 @@ def test_supports_equality():
     assert left == right
     assert left != A.context(2)
     assert hash(left) == hash(right)
-    assert left != {A: 1, B: 2}
+    assert left != {A.key: 1, B.key: 2}
     assert left != left.services
 
 
@@ -138,7 +138,7 @@ def test_merges_with_right_bias_and_preserves_empty_operand_identity():
 
     assert (Context.empty() | left) is left
     assert (left | Context.empty()) is left
-    assert list(merged.services.items()) == [(A, 3), (B, 2), (C, 4)]
+    assert list(merged.services.items()) == [(A.key, 3), (B.key, 2), (C.key, 4)]
 
 
 async def test_resolves_reference_defaults_lazily_and_caches_them():
@@ -148,7 +148,7 @@ async def test_resolves_reference_defaults_lazily_and_caches_them():
     lookup is `Ref().use()` with nothing provided. The `pick` line is not ported."""
     calls: list[int] = []
 
-    class Ref(Reference[object]):
+    class Ref(Reference[object], key="ContextTest/LazyRef"):
         @classmethod
         def default(cls) -> object:
             calls.append(1)
@@ -167,7 +167,7 @@ async def test_resolves_reference_defaults_lazily_and_caches_them():
 async def test_context_service():
     """Effect.test.ts:405 "Context.Service"."""
 
-    class ATag(Tag[str]): ...
+    class ATag(Tag[str], key="ATag"): ...
 
     seen: list[str] = []
     eff = ATag().use().flat_map(lambda a: sync(lambda: seen.append(a)))
@@ -185,7 +185,7 @@ async def test_provide_service_restores_the_original_context_if_interrupted_befo
     point: the new context is built and about to be installed, the body hasn't run. The
     assertion is upstream's: the finalizer outside sees the *same* context object as before."""
 
-    class Value(Tag[int]): ...
+    class Value(Tag[int], key="InterruptedValue"): ...
 
     me: list[AnyFiber] = []
     original: list[ContextMap] = []
@@ -193,7 +193,7 @@ async def test_provide_service_restores_the_original_context_if_interrupted_befo
     ran: list[str] = []
 
     def merge_then_interrupt(old: ContextMap) -> ContextMap:
-        new = {**old, Value: 2}
+        new = {**old, Value.key: 2}
         me[0].interrupt_unsafe()
         return new
 
@@ -216,7 +216,7 @@ async def test_provide_service_restores_the_original_context_if_interrupted_befo
 def test_equality_handles_nan_and_cycles():
     """Equal.ts compareBoth/compareObjects: NaN equality and repeated pairs close cycles."""
 
-    class Value(Tag[object]): ...
+    class Value(Tag[object], key="ContextTest/Value"): ...
 
     assert Value.context(float("nan")) == Value.context(float("nan"))
     left: list[object] = []
@@ -231,7 +231,7 @@ def test_equality_handles_nan_and_cycles():
 def test_equality_checks_data_beyond_a_cycle():
     """Equal.ts compareOnPath: a repeated pair only discharges that recursive comparison."""
 
-    class Value(Tag[object]): ...
+    class Value(Tag[object], key="ContextTest/Value"): ...
 
     left: dict[str, object] = {}
     right: dict[str, object] = {}

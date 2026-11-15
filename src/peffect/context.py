@@ -1,8 +1,8 @@
 """Services: Tag, Reference, Context, provide. Built on the kernel's update_context.
 
-    class Users(Tag[UserRepo]): ...          # the class is the key; R gains Users when used
-    repo = yield from Users()                # Effect[UserRepo, Never, Users]
-    provide(Users.context(impl))(program)    # removes Users from program's R
+    class Users(Tag[UserRepo], key="app/Users"): ...  # the key is the identity; R gains Users
+    repo = yield from Users()                          # Effect[UserRepo, Never, Users]
+    provide(Users.context(impl))(program)              # removes Users from program's R
 
 Effect v4: Context.ts (Service, Reference), internal/effect.ts:2379-2397 (provideContext).
 """
@@ -23,25 +23,33 @@ class MissingService(Exception):
     """A tag was read with no service provided: a defect, since the types should prevent it."""
 
     def __init__(self, tag: type[Tag[Any]]) -> None:
-        super().__init__(f"no service for {tag.__qualname__}; provide({tag.__name__}.context(...))")
+        super().__init__("Service not found" + (f": {tag.key}" if tag.key else ""))
         self.tag = tag
 
 
 class Tag[S]:
-    """Subclass once per service: ``class Users(Tag[UserRepo]): ...``.
+    """Subclass once per service: ``class Users(Tag[UserRepo], key="app/Users"): ...``.
 
-    The subclass itself is the runtime key, looked up exactly. So a concrete tag can't be
-    subclassed: R is covariant, and a parent tag's context would type-check against a child
-    tag's request that the exact lookup can't answer. ``__init_subclass__`` enforces it.
+    The explicit ``key`` string is the runtime identity, as Effect v4's
+    ``Context.Service("app/Users")`` (Context.ts:256-262): two declarations with one key read and
+    replace the same service. The class stays the static R. A concrete tag can't be subclassed:
+    R is covariant, and a parent tag's context would type-check against a child tag's request
+    under another key. ``__init_subclass__`` enforces both rules; there is no default key.
     """
 
     __slots__ = ()
+    key: ClassVar[str]
 
-    def __init_subclass__(cls, **kwargs: Any) -> None:
+    def __init_subclass__(cls, *, key: str | None = None, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
         for base in cls.__bases__:
             if issubclass(base, Tag) and base.__module__ != __name__:  # Tag, Reference are roots
                 raise TypeError(f"{cls.__name__}: tag {base.__name__} is concrete; subclass Tag")
+        if cls.__module__ == __name__:
+            return
+        if not isinstance(key, str):  # also catches key=1 from types.new_class
+            raise TypeError(f"{cls.__name__}: declare its key, class {cls.__name__}(..., key=...)")
+        cls.key = key
 
     def __iter__(self) -> Generator[Effect[S, Never, Self], Any, S]:
         return (yield from self.use())
@@ -52,14 +60,15 @@ class Tag[S]:
 
     @classmethod
     def _find(cls, context: ContextMap) -> Effect[S, Never, Never]:
-        return succeed(context[cls]) if cls in context else die(MissingService(cls))
+        key = cls.key
+        return succeed(context[key]) if key in context else die(MissingService(cls))
 
     @classmethod
     def context(cls, service: S) -> Context[Self]:
         """The context holding just this service. Combine with ``|``; the right side wins."""
         if cls.__module__ == __name__:
             raise TypeError(f"subclass {cls.__name__} per service, then call .context on it")
-        return Context({cls: service}, _TOKEN)
+        return Context({cls.key: service}, _TOKEN)
 
 
 class Reference[S](Tag[S]):
@@ -86,8 +95,9 @@ class Reference[S](Tag[S]):
 
     @classmethod
     def _find(cls, context: ContextMap) -> Effect[S, Never, Never]:
-        if cls in context:
-            return succeed(context[cls])
+        if cls.key in context:
+            return succeed(context[cls.key])
+        # per declaration, not per key (Context.ts:1091-1096)
         if "_default_value" not in cls.__dict__:  # own dict: a cache is never inherited
             cls._default_value = cls.default()
         return succeed(cls._default_value)
@@ -149,13 +159,14 @@ class Context(Generic[T_contra]):
 
     __slots__ = ("_services",)
 
-    def __init__(self, services: dict[type, Any], token: _Token) -> None:
+    def __init__(self, services: dict[str, Any], token: _Token) -> None:
         if token is not _TOKEN:
             raise TypeError("build a Context with Users.context(impl), not Context(...)")
-        self._services: Mapping[type, Any] = MappingProxyType(services)
+        self._services: Mapping[str, Any] = MappingProxyType(services)
 
     @property
-    def services(self) -> Mapping[type, Any]:
+    def services(self) -> Mapping[str, Any]:
+        """Services by key string, in insertion order."""
         return self._services
 
     @staticmethod

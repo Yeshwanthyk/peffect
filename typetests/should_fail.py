@@ -69,13 +69,13 @@ _n: Effect[int, NotFound, Never] = find(1)
 class Repo: ...
 
 
-class Users(Tag[Repo]): ...
+class Users(Tag[Repo], key="typetests/Users"): ...
 
 
-class Log(Tag[str]): ...
+class Log(Tag[str], key="typetests/Log"): ...
 
 
-class Level(Reference[str]):
+class Level(Reference[str], key="typetests/Level"):
     @classmethod
     def default(cls) -> str:
         return "info"
@@ -128,7 +128,7 @@ def delete(fiber: Fiber[Any, Any]) -> None:
 
 def write_item(fiber: Fiber[Any, Any]) -> None:
     # 14. CONTEXT_ITEM_WRITTEN: the mapping is read-only
-    fiber.context[Users] = Repo()
+    fiber.context[Users.key] = Repo()
 
 
 def replace_services(ctx: Context[Users]) -> None:
@@ -296,7 +296,7 @@ _traversal_value_lost: Effect[list[int], NotFound, Never] = for_each([1], lambda
 for_each([1], lambda u, _i: find(u), concurrency="inherit")
 
 
-class Db(Tag[int]): ...
+class Db(Tag[int], key="typetests/Db"): ...
 
 
 class Timeout(Exception): ...

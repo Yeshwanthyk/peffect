@@ -34,10 +34,10 @@ from peffect import (
 from peffect.core import EMPTY_CONTEXT, AnyFiber, WithFiber
 
 
-class Users(Tag[str]): ...
+class Users(Tag[str], key="test_context/Users"): ...
 
 
-class Log(Tag[str]): ...
+class Log(Tag[str], key="test_context/Log"): ...
 
 
 class Boom(Exception):
@@ -50,7 +50,7 @@ def raw() -> WithFiber[ContextMap, Never, Never]:
 
 
 def users_now() -> WithFiber[object, Never, Never]:
-    return WithFiber(lambda f: succeed(f.context.get(Users)))
+    return WithFiber(lambda f: succeed(f.context.get(Users.key)))
 
 
 # -- C1: restored on every exit ---------------------------------------------------------------
@@ -82,7 +82,9 @@ async def test_nested_provide_layers_and_unwinds():
     seen: list[tuple[object, object]] = []
 
     def record(_: object = None):
-        return raw().flat_map(lambda c: sync(lambda: seen.append((c.get(Users), c.get(Log)))))
+        return raw().flat_map(
+            lambda c: sync(lambda: seen.append((c.get(Users.key), c.get(Log.key))))
+        )
 
     @gen
     def prog():
@@ -124,7 +126,7 @@ async def test_interrupt_at_install_still_restores(monkeypatch: pytest.MonkeyPat
     def observe_swap(fiber: AnyFiber, context: ContextMap) -> ContextMap:
         old = swap(fiber, context)
         if fiber.interrupted:
-            installed.append(fiber.context.get(Users))
+            installed.append(fiber.context.get(Users.key))
         return old
 
     monkeypatch.setattr(Fiber, "swap_context", observe_swap)
@@ -132,7 +134,7 @@ async def test_interrupt_at_install_still_restores(monkeypatch: pytest.MonkeyPat
     after: list[object] = []
 
     def install(old: ContextMap) -> ContextMap:
-        new = {**old, Users: "inner"}
+        new = {**old, Users.key: "inner"}
         me[0].interrupt_unsafe()  # running, so this is deferred to the next loop top
         return new
 
@@ -189,8 +191,8 @@ async def test_child_inherits_context_at_fork_and_cannot_leak_back():
 
 
 async def test_fiber_context_is_read_only_and_owned():
-    source: dict[object, Any] = {Users: "a"}
-    mutate = sync(lambda: source.__setitem__(Users, "changed"))
+    source: dict[str, Any] = {Users.key: "a"}
+    mutate = sync(lambda: source.__setitem__(Users.key, "changed"))
     seen: list[object] = []
     refused: list[str] = []
 
@@ -201,7 +203,7 @@ async def test_fiber_context_is_read_only_and_owned():
             refused.append(name)
 
     def poke(f: AnyFiber):
-        attempt("item", lambda: cast(Any, f.context).__setitem__(Users, "x"))
+        attempt("item", lambda: cast(Any, f.context).__setitem__(Users.key, "x"))
         attempt("assign", lambda: setattr(f, "context", {}))
         attempt("delete", lambda: delattr(f, "context"))
         return Users().use()
@@ -226,7 +228,7 @@ async def test_root_starts_empty():
 async def test_reference_default_built_once_across_roots_and_override_restores():
     calls: list[int] = []
 
-    class Level(Reference[str]):
+    class Level(Reference[str], key="test_context/Level"):
         @classmethod
         def default(cls) -> str:
             calls.append(1)
@@ -251,7 +253,7 @@ async def test_reference_default_built_once_across_roots_and_override_restores()
 async def test_failed_default_is_a_defect_and_not_kept():
     calls: list[int] = []
 
-    class Flaky(Reference[int]):
+    class Flaky(Reference[int], key="test_context/Flaky"):
         @classmethod
         def default(cls) -> int:
             calls.append(1)
@@ -270,7 +272,7 @@ async def test_failed_default_is_a_defect_and_not_kept():
 
 
 def test_concrete_tags_cannot_be_subclassed():
-    class Level(Reference[str]):
+    class Level(Reference[str], key="test_context/Level"):
         @classmethod
         def default(cls) -> str:
             return "info"
@@ -293,11 +295,11 @@ def test_base_tags_build_no_context():
 
 def test_context_has_no_public_constructor_and_merges_right_wins():
     with pytest.raises(TypeError):
-        cast(Any, Context)({Users: "forged"}, object())
+        cast(Any, Context)({Users.key: "forged"}, object())
     merged = Users.context("a") | Log.context("x") | Users.context("b")
-    assert dict(merged.services) == {Users: "b", Log: "x"}
+    assert dict(merged.services) == {Users.key: "b", Log.key: "x"}
     with pytest.raises(TypeError):
-        cast(Any, merged.services)[Users] = "c"
+        cast(Any, merged.services)[Users.key] = "c"
 
 
 async def test_merged_context_right_side_wins_at_runtime():

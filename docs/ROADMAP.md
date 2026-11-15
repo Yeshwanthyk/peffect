@@ -158,8 +158,8 @@ an AGENTS.md section with the idiom and the mistakes it prevents.
 ## Fidelity gate (2026-11-15)
 
 User requires a faithful port: documentation of a deviation is not acceptance of parity.
-Known gaps to reconcile before calling the port faithful: class-only service identity versus
-upstream string keys, incomplete Equal protocols, and seconds-only Clock inputs versus Duration
+Known gaps to reconcile before calling the port faithful (string-key service identity closed
+2026-11-15, INVARIANTS C10): incomplete Equal protocols, and seconds-only Clock inputs versus Duration
 normalization and precision. Preserve observable upstream behavior; Python syntax/platform
 adaptations must be distinguished from semantic omissions.
 

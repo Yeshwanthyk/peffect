@@ -29,10 +29,10 @@ class NotFound(Exception):
     user_id: int
 
 
-class Users(Tag[UserRepo]): ...
+class Users(Tag[UserRepo], key="example/Users"): ...
 
 
-class Greeting(Reference[str]):
+class Greeting(Reference[str], key="example/Greeting"):
     @classmethod
     def default(cls) -> str:
         return "hello"
