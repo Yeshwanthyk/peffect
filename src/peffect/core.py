@@ -455,7 +455,12 @@ class _AsyncCancel(Frame):
     def on_err(self, cause: Cause[Any], fiber: AnyFiber) -> AnyEffect | None:
         if not cause.is_interrupted:
             return Failure(cause)
-        return OnSuccess(self.cancel, lambda _: Failure(cause))
+        # asyncFinalizer uses combineFinalizerCause: original interrupt first,
+        # then cancellation failures, electing typed failures when a defect exists.
+        finalizer: AnyEffect = OnFailure(
+            self.cancel, lambda cleanup: Failure((cause + cleanup).elect_defects())
+        )
+        return OnSuccess(finalizer, lambda _: Failure(cause))
 
 
 @final

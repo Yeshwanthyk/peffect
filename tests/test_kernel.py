@@ -7,7 +7,9 @@ import pytest
 
 from peffect import (
     Cause,
+    Die,
     Effect,
+    Fail,
     Failure,
     Success,
     async_,
@@ -16,6 +18,7 @@ from peffect import (
     die,
     ensuring,
     fail,
+    fail_cause,
     fork,
     fork_daemon,
     gen,
@@ -294,3 +297,26 @@ async def test_interrupt_while_waiting_for_children_lands():
         assert isinstance(target.exit, Failure) and target.exit.cause.is_interrupted
 
     await asyncio.wait_for(scenario(), timeout=2)
+
+
+@pytest.mark.parametrize("typed", [False, True])
+async def test_async_cancel_combines_original_interrupt_before_elected_cleanup(typed: bool):
+    """Effect v4 asyncFinalizer :1268-1271: original interrupt precedes elected cleanup."""
+    cleanup: Cause[str] = (
+        Cause((Fail("typed"), Die("defect"))) if typed else Cause((Die("defect"),))
+    )
+
+    def register(_: Resume[None, Never, Never]) -> Effect[Never, str, Never]:
+        return fail_cause(cleanup)
+
+    @gen
+    def program():
+        fiber = yield from fork(async_(register), start_immediately=True)
+        yield from fiber.interrupt()
+        return (yield from fiber.await_())
+
+    ex = await run(program())
+    assert isinstance(ex, Failure)
+    assert isinstance(ex.cause.reasons[0], Interrupt)
+    assert ex.cause.failures == []
+    assert ex.cause.defects == (["typed", "defect"] if typed else ["defect"])

@@ -29,6 +29,7 @@ from peffect import (
     exit_,
     fail,
     fiber_id,
+    for_each,
     fork,
     fork_daemon,
     gen,
@@ -308,3 +309,16 @@ assert_type(
     fork_daemon(find(1), uninterruptible="inherit"), Effect[Fiber[str, NotFound], Never, Never]
 )
 assert_type(fork(succeed(1)), Effect[Fiber[int, Never], Never, Never])
+
+
+# for_each keeps the mapper's B, E and R; the index is an int, the result a list in input order.
+def traversal_types(ids: list[int], names: str) -> None:
+    assert_type(for_each(ids, lambda uid, _i: find(uid)), Effect[list[str], NotFound, Never])
+    assert_type(
+        for_each(ids, lambda _uid, _i: Users().use(), concurrency="unbounded"),
+        Effect[list[Repo], Never, Users],
+    )
+    assert_type(
+        for_each(names, lambda c, i: succeed((c, i)), concurrency=2),
+        Effect[list[tuple[str, int]], Never, Never],
+    )

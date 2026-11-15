@@ -20,6 +20,7 @@ from peffect import (
     await_all,
     catch_tag,
     fail,
+    for_each,
     fork,
     fork_daemon,
     gen,
@@ -277,3 +278,16 @@ fork_daemon(succeed(1), uninterruptible=False)
 fork(succeed(1), uninterruptible="masked")
 # 49. INHERITED_FORK_ERROR_LOST: a fork retains the worker's E
 _wrong_worker: Effect[Fiber[str, Never], Never, Never] = fork(find(1), uninterruptible="inherit")
+
+
+async def traversal_still_needs_its_environment() -> None:
+    # 50. TRAVERSAL_DEPENDENCY_MISSING: concurrent traversal keeps each mapper's R
+    await peffect.run(for_each([1, 2], lambda _uid, _i: Users().use(), concurrency=2))
+
+
+# 51. TRAVERSAL_ERROR_LOST: the mapper's E stays in the traversal's error channel
+_traversal_error_lost: Effect[list[str], Never, Never] = for_each([1], lambda uid, _i: find(uid))
+# 52. TRAVERSAL_VALUE_LOST: results are a list of the mapper's B, not of the items
+_traversal_value_lost: Effect[list[int], NotFound, Never] = for_each([1], lambda u, _i: find(u))
+# 53. TRAVERSAL_UNSUPPORTED_CONCURRENCY: only an int or "unbounded"
+for_each([1], lambda u, _i: find(u), concurrency="inherit")

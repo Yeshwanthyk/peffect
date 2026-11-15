@@ -198,3 +198,23 @@ already-completed fibers without recursive waiting. Bulk semantics are not forma
 the extended kernel model checks inherited startup plus existing protocol properties. Independent
 Sol review found an escaping iterator callback exception; the correction and regression passed
 a fresh independent recheck. Iterator failures become waiter defects without altering target Exits.
+
+
+## Traversal — `tests/test_traversal_upstream.py`
+
+`Effect.test.ts` forEach ports: :771 sequential, :777 unbounded, :783 bounded, :819 bounded
+interrupt (TestClock adaptation: per-item Deferred gates), :834, :852, :882 (`Effect.all` as
+`for_each` with identity), :907, :933, :960, :990 length = 0, :996 string. Labelled
+source-derived cases: ordered results when workers finish out of order, a fresh run per
+execution, and the concurrency floor of 1 (parametrized: default, 1, 0, -3). Two more were
+added after the implementation, because scratch mutations survived the ports: a mapper defect
+leaves only after started workers are interrupted (initial pump and observer refill), and
+workers inherit the caller's mask.
+
+Status: independently verified by Sol 6.1. 23 traversal cases pass, plus two direct Async
+cancellation regressions in test_kernel.py. The red commit's 8 ports were migrated
+from a looked-up accessor to the public import with every test body AST-identical. Not ported:
+"sequential interrupt", "unbounded interrupt" and "unbounded fail" (need TestClock), and
+`discard`. Independent review corrections preserve worker insertion order and combine the
+original interrupt before elected cancellation failures; upstream runtime replay and focused
+recheck passed. Traversal is not formally modeled.

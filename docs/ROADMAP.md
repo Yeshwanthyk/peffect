@@ -111,6 +111,13 @@ an AGENTS.md section with the idiom and the mistakes it prevents.
   batch G's four Scope.test.ts ports pass (:7 adapted with Deferred gates, no TestClock). The
   closing-fiber key skip waits on forkIn (batch F). Unmodeled by the formal kernel.
 
+- Traversal (2026-11-15): public `for_each(items, f, *, concurrency=1)` in `fiber.py`, a port of
+  forEach and iterateConcurrentImpl (`internal/effect.ts:5030-5112, :5157-5320`), kept in the
+  kernel because the worker state machine needs observers and interrupts that B3 keeps private.
+  12 Effect.test.ts ports and 5 labelled source-derived tests (21 cases) pass. No `discard` and no ambient
+  concurrency yet. Independently verified by Sol 6.1 after ordered-worker and primitive cancellation
+  corrections; 185 tests pass excluding TestClock. Not formally modeled.
+
 ## Order and why
 
 - Context/Clock/Scope come before concurrency: `timeout` needs Clock (else it is untestable

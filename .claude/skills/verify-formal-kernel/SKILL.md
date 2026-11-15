@@ -60,6 +60,11 @@ external interrupt of P can arrive at any loop turn; async completions can arriv
 or immediate, nested. 988 states, depth 22. Both fibers regain interruptibility before normal
 completion: K7 does not claim that a permanently masked worker must publish an interrupt.
 
+**Cancellation cause correction:** `_AsyncCancel.on_err` combines the original interrupt
+with cleanup failure and elects defects (upstream `asyncFinalizer`, :1268-1271). This changes
+unmodeled cause semantics, not masking or the protocol transitions. Runtime regressions cover
+it; the protocol rerun still explores 988 states, depth 22, with 24 linked tests passing.
+
 **Bulk limits:** public `await_all` / `interrupt_all` reuse the modeled Async/observer protocol,
 but ordered iteration, multiple targets, signal-before-wait and cancellation subscription
 cleanup are checked by `test_fiber_bulk_upstream.py` and runtime mutations, not this model.

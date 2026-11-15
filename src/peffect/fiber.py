@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import itertools
-from collections.abc import Callable, Iterable
+import math
+from collections.abc import Callable, Iterable, Iterator
 from typing import Any, Generic, Literal, Never, TypeVar, final
 
-from peffect.cause import Cause
+from peffect.cause import Cause, Interrupt
 from peffect.core import (
     ANY,
     EMPTY_CONTEXT,
@@ -29,9 +30,11 @@ from peffect.core import (
     Park,
     Resume,
     Success,
+    Suspend,
     Sync,
     Then,
     WithFiber,
+    uninterruptible,
 )
 
 A_co = TypeVar("A_co", covariant=True)
@@ -399,6 +402,189 @@ def fork_daemon[A, E, R](
     )
 
 
+# ================================================================================================
+# Traversal
+# ================================================================================================
+
+
+def for_each[A, B, E, R](
+    items: Iterable[A],
+    f: Callable[[A, int], Effect[B, E, R]],
+    *,
+    concurrency: int | Literal["unbounded"] = 1,
+) -> Effect[list[B], E, R]:
+    """Map each item and its index to an effect; succeed with the values in input order.
+
+    Concurrency 1 (the default; below 1 also means 1) runs one item at a time, reading the
+    iterable lazily. Higher runs up to that many items at once as traversal-owned daemon workers that
+    inherit the caller's mask; the first failure interrupts the rest, and defects from their cleanup are
+    kept. Each run starts afresh. Effect v4: forEach, internal/effect.ts:5030-5112."""
+    limit = math.inf if concurrency == "unbounded" else max(1, concurrency)
+
+    def start() -> Effect[list[B], E, R]:
+        if limit == 1:
+            return _for_each_sequential(iter(items), f)
+        array = list(items)
+        if not array:
+            return Success([])
+        out: list[Any] = [None] * len(array)
+        eff = _for_each_concurrent(array, f, out, limit)
+        return Success(out) if eff is None else eff.as_(out)
+
+    return Suspend(start)
+
+
+def _for_each_sequential[A, B, E, R](
+    iterator: Iterator[A], f: Callable[[A, int], Effect[B, E, R]]
+) -> Effect[list[B], E, R]:
+    """forEachSequential, internal/effect.ts:5085-5108: the next item is read after a step."""
+    out: list[B] = []
+
+    def next_(index: int) -> Effect[list[B], E, R]:
+        for item in iterator:
+
+            def keep(b: B) -> Effect[list[B], E, R]:
+                out.append(b)
+                return next_(index + 1)
+
+            return f(item, index).flat_map(keep)
+        return Success(out)
+
+    return next_(0)
+
+
+def _for_each_concurrent[A, B, E, R](
+    items: list[A], f: Callable[[A, int], Effect[B, E, R]], out: list[Any], concurrency: float
+) -> Effect[None, E, R] | None:
+    """iterateConcurrentImpl with forEachConcurrent's step, internal/effect.ts:5160-5320.
+
+    `go` pumps items until the window is full or a terminal Exit is recorded. Ready Exits are
+    stepped inline; the first effect that is not one becomes an Async on the caller, and each
+    later one a child forked with the caller's mask. A child's observer steps its Exit, refills
+    a paused `go`, or after a terminal folds the child's non-interrupt reasons into it. None
+    means every item finished inline with no failure."""
+    index = 0
+    end = len(items)
+    done = False
+    parent: Fiber[Any, Any] | None = None
+    fibers: dict[Fiber[Any, Any], None] = {}
+    resume: Resume[None, E, R] | None = None
+    terminal: Exit[None, E] | None = None
+    effect: Effect[B, E, R] | None = None  # the item effect pending while the Async starts
+
+    def step(exit_: Exit[B, E], i: int) -> Failure[E] | None:
+        if isinstance(exit_, Failure):
+            return exit_
+        out[i] = exit_.value
+        return None
+
+    def fail_defect(error: Exception) -> Effect[None, E, R]:
+        nonlocal terminal, done
+        defect: Failure[E] = Failure(Cause.die(error))
+        terminal = defect
+        done = True
+        if not fibers:
+            return defect
+        return uninterruptible(interrupt_all(list(fibers))).flat_map(
+            lambda _: defect if terminal is None else terminal
+        )
+
+    def on_cancel() -> Effect[None, E, R]:
+        nonlocal terminal
+        if terminal is None:
+            terminal = UNIT
+        return interrupt_all(list(fibers)).flat_map(
+            lambda _: terminal if isinstance(terminal, Failure) else UNIT
+        )
+
+    def observe(fiber: Fiber[B, E], i: int, paused: list[bool]) -> Observer:
+        def on_exit(exit_: Exit[B, E]) -> None:
+            nonlocal terminal
+            assert resume is not None
+            fibers.pop(fiber, None)
+            try:
+                if terminal is not None:
+                    if isinstance(exit_, Failure):
+                        kept = tuple(r for r in exit_.cause.reasons if not isinstance(r, Interrupt))
+                        if kept:
+                            cause = Cause(kept)
+                            terminal = Failure(
+                                (terminal.cause + cause).elect_defects()
+                                if isinstance(terminal, Failure)
+                                else cause
+                            )
+                elif (result := step(exit_, i)) is not None:
+                    terminal = result
+                    go()
+                if paused[0]:
+                    if (eff := go()) is not None:
+                        resume(eff)
+                elif done and not fibers:
+                    resume(UNIT if terminal is None else terminal)
+            except Exception as error:
+                resume(fail_defect(error))
+
+        return on_exit
+
+    def go() -> Effect[None, E, R] | None:
+        nonlocal index, done, terminal, effect
+        paused = [False]  # this call's: its observers refill only once it has paused
+        while terminal is None and index < end:
+            eff = effect if effect is not None else f(items[index], index)
+            if isinstance(eff, (Success, Failure)):
+                terminal = step(eff, index)
+                if terminal is not None:
+                    break
+            elif parent is None:
+                return WithFiber(lambda p, first=eff: Async(lambda cb: register(p, first, cb)))
+            else:
+                effect = None
+                # Every go() runs on the caller's loop: in its drive, or in a child's observer.
+                loop = asyncio.get_running_loop()
+                fiber = _start(None, eff, parent.context, loop, True, parent.interruptible)
+                if fiber.exit is not None:
+                    terminal = step(fiber.exit, index)
+                    if terminal is not None:
+                        break
+                else:
+                    fibers[fiber] = None
+                    fiber.add_observer(observe(fiber, index, paused))
+                    if len(fibers) >= concurrency:
+                        paused[0] = True
+                        index += 1
+                        return None
+            index += 1
+        done = True
+        if terminal is not None:
+            if fibers:
+                assert parent is not None
+                for fiber in list(fibers):
+                    fiber.interrupt_unsafe(parent.id)
+                return None
+            if resume is not None or isinstance(terminal, Failure):
+                return terminal
+        elif resume is not None and not fibers:
+            resume(UNIT)
+        return None
+
+    def register(
+        p: Fiber[Any, Any], first: Effect[B, E, R], cb: Resume[None, E, R]
+    ) -> Effect[None, E, R] | None:
+        nonlocal parent, effect, resume
+        parent, effect, resume = p, first, cb
+        try:
+            result = go()
+        except Exception as error:
+            cb(fail_defect(error))
+            return None
+        if result is not None:
+            cb(result)
+            return None
+        return Suspend(on_cancel)
+
+    return go()
+
+
 async def run_exit[A, E](eff: Effect[A, E, Never]) -> Exit[A, E]:
     """Run on the current asyncio loop and return the Exit. Cancelling the awaiting task
     interrupts the fiber and waits for its finalizers before re-raising CancelledError."""
@@ -422,4 +608,14 @@ async def run[A](eff: Effect[A, Never, Never]) -> A:
     raise exit_.cause.squash()
 
 
-__all__ = ["UNIT", "Fiber", "await_all", "fork", "fork_daemon", "interrupt_all", "run", "run_exit"]
+__all__ = [
+    "UNIT",
+    "Fiber",
+    "await_all",
+    "for_each",
+    "fork",
+    "fork_daemon",
+    "interrupt_all",
+    "run",
+    "run_exit",
+]

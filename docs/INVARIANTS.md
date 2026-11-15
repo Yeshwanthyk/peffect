@@ -217,6 +217,37 @@ remains separate; callers outside the kernel need no new B3 access.
 Boolean uninterruptible modes remain unsupported. The kernel model covers inherited startup
 and the existing interrupt/observer protocol, not bulk ordering or multiple-target semantics.
 
+## Traversal
+
+Pinned `internal/effect.ts:5030-5112, :5157-5320` (forEach, forEachSequential,
+resolveConcurrency, iterateConcurrentImpl). Implemented, awaiting independent review.
+
+**Where it lives.** Two placements were weighed. (a) A non-kernel module over a newly public
+`fork_unsafe`: not enough, since the state machine also needs `add_observer`, `interrupt_unsafe`
+and `id`, all B3-forbidden, so worker management would leak across the boundary. (b) Chosen: the
+state machine lives in `fiber.py`, as upstream keeps it in `internal/effect.ts` beside `forkUnsafe`.
+No new public unsafe API; B3 and the boundary checker are unchanged.
+
+| # | Invariant | Enforced by | Pinned by |
+|---|---|---|---|
+| T1 | **Results follow input order**, whatever order workers finish; each run maps afresh. | `step` writes `out[index]`; all state is built inside `Suspend` | `test_bounded`, `test_string`, `test_source_concurrent_results_keep_input_order_when_workers_finish_out_of_order`, `test_source_each_run_maps_afresh_into_its_own_list` |
+| T2 | **Concurrency below 1 is 1**; 1 runs sequentially over a lazy iterator; `"unbounded"` has no window. | `max(1, n)`; `_for_each_sequential` reads the next item after a step | `test_sequential`, `test_unbounded`, `test_length_0`, `test_source_concurrency_below_one_and_the_default_run_one_at_a_time` |
+| T3 | **At most `concurrency` workers run; a finished worker refills the window.** Ready Exits are stepped inline without forking. | `go` pauses when the set is full; the pausing call's observers resume it | `test_bounded_interrupt`; refill mutation |
+| T4 | **The first failure interrupts the rest and waits for them.** Their non-interrupt reasons join the terminal cause, defects elected. | observer fold after `terminal`; `done` and an empty set resume | :852, :882, :933; aggregation and cleanup-wait mutations |
+| T5 | **An external interrupt interrupts workers, waits, and keeps a recorded failure.** | the Async canceller: `terminal ??= void`, `interrupt_all`, then the recorded Failure | :819, :834, :852 |
+| T6 | **A mapper raising, at start or during an observer refill, is a defect** after started workers are interrupted, masked. | `fail_defect`: `uninterruptible(interrupt_all(...))` then the terminal | :907, :933, :960, `test_source_a_mapper_defect_leaves_only_after_started_workers_are_interrupted` (initial, refill); both failure-path mutations |
+| T7 | **Traversal owns daemon workers that inherit the caller's mask and context.** | `_start(None, eff, parent.context, loop, True, parent.interruptible)` | `test_source_workers_inherit_the_callers_mask`; mask mutation |
+
+`discard` and ambient concurrency are not ported. Independent review found two parity gaps:
+Python's unordered worker set reordered cleanup causes; the worker collection is now an
+insertion-ordered dict. `_AsyncCancel` now combines the original interrupt before a failing
+canceller's cause and elects defects, matching `asyncFinalizer` (:1268-1271). Direct kernel
+regressions and a traversal regression pin both ordering and election. The four new regression
+cases failed before these corrections and pass afterward. Traversal owns daemon workers and
+waits for cleanup itself, matching upstream rather than relying on caller supervision.
+Traversal and cancellation cause semantics are not formally modeled; the kernel protocol is
+unchanged.
+
 ## Kernel boundary
 
 Only the kernel (`src/peffect/core.py`, `fiber.py`, `cause.py`, `__init__.py`) knows about fibers
