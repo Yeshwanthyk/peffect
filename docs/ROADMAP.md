@@ -179,3 +179,21 @@ TestClock tests are drafted, not accepted as a complete contract yet. Port Scope
 tracking prerequisites before TestClock implementation. Keep upstream make's Scope requirement;
 never replace scheduler settling with a fixed yield count. Upstream-required dependencies may
 move ahead of their original roadmap tier rather than being recreated inside TestClock.
+
+## Application composition acceptance (2026-11-15)
+
+The executable comparison in `examples/parity` runs 16 scenarios on real pinned Effect v4
+and peffect: service sharing, typed error propagation/recovery, resource cleanup, replacement,
+a shared checkout/risk dependency diamond, bounded parallel orders and batch cancellation.
+All observed outcomes and ordered events match; only validation-library names and diagnostic
+text are normalized. Nine negative typing scenarios are checked in both languages, with the
+Python nonmatching-catch limitation documented explicitly.
+
+Independent review caught a lossy TS error reporter; its regression now rejects extra causes.
+The reference-quality audit also caught global trace contamination; per-run EventLog provision
+and a concurrent-run regression fix it using existing APIs. Application and fixture modules
+are separated. See `docs/APPLICATION_PATTERN_AUDIT.md` for findings and why no new broad skill
+was added. No peffect production API was required for this application unit.
+
+The full verifier remains red on the 16 missing-TestClock draft tests. ManagedRuntime is also
+unimplemented; neither is claimed by this application acceptance.

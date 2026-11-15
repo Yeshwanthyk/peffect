@@ -30,10 +30,16 @@ driven and the run exits 1.
 ```
 
 Steps, in order: `doctor`, `example` (`examples/quickstart.py`), `context`
-(`examples/context.py`), `clock` (`examples/clock.py`), `scope` (`examples/scope.py`), `boundaries`
+(`examples/context.py`), `clock` (`examples/clock.py`), `scope` (`examples/scope.py`),
+`parity` (fresh TypeScript/Python application comparison), `parity_ts` (TypeScript compilation),
+`parity_types` (positive/negative TypeScript fixtures), `boundaries`
 (`scripts/check_boundaries.py` on `src/peffect` outside the kernel, and `examples/`), `pytest`
 (all tests, including the boundary probes in `tests/test_boundaries.py`), `ruff check .`, and
 `pyright`. A failing step doesn't stop the later ones, so one run shows every failure.
+
+The parity steps also need Bun and the pinned TypeScript dev dependency in `examples/parity/`.
+Setup and the comparison boundary are documented in `examples/parity/README.md`. Missing tools
+fail the steps; the verifier never substitutes captured output for an actual reference run.
 
 ## Evidence
 

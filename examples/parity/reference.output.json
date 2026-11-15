@@ -171,6 +171,258 @@
         "cancel.returned",
         "terminated:interrupt"
       ]
+    },
+    {
+      "name": "composed_success",
+      "outcome": {
+        "kind": "success",
+        "value": {
+          "user": "ann",
+          "payment": "charged:1",
+          "status": "paid"
+        }
+      },
+      "repo": {
+        "acquire": 1,
+        "release": 1
+      },
+      "events": [
+        "repo.acquire",
+        "users.build",
+        "inventory.acquire",
+        "payments.acquire",
+        "risk.build",
+        "checkout.build",
+        "risk.checked:1",
+        "inventory.reserve:1:book",
+        "payments.charge:1",
+        "reservation.release:1:book:success",
+        "payments.release:success",
+        "inventory.release:success",
+        "repo.release:success",
+        "terminated:success"
+      ]
+    },
+    {
+      "name": "composed_user_failure",
+      "outcome": {
+        "kind": "failure",
+        "category": "domain",
+        "tag": "UserNotFound",
+        "detail": {
+          "userId": 99
+        }
+      },
+      "repo": {
+        "acquire": 1,
+        "release": 1
+      },
+      "events": [
+        "repo.acquire",
+        "users.build",
+        "inventory.acquire",
+        "payments.acquire",
+        "risk.build",
+        "checkout.build",
+        "payments.release:failure",
+        "inventory.release:failure",
+        "repo.release:failure",
+        "terminated:failure"
+      ]
+    },
+    {
+      "name": "composed_stock_failure",
+      "outcome": {
+        "kind": "failure",
+        "category": "domain",
+        "tag": "OutOfStock",
+        "detail": {
+          "sku": "sold-out"
+        }
+      },
+      "repo": {
+        "acquire": 1,
+        "release": 1
+      },
+      "events": [
+        "repo.acquire",
+        "users.build",
+        "inventory.acquire",
+        "payments.acquire",
+        "risk.build",
+        "checkout.build",
+        "risk.checked:1",
+        "inventory.reserve:1:sold-out",
+        "payments.release:failure",
+        "inventory.release:failure",
+        "repo.release:failure",
+        "terminated:failure"
+      ]
+    },
+    {
+      "name": "composed_payment_failure",
+      "outcome": {
+        "kind": "failure",
+        "category": "domain",
+        "tag": "PaymentDeclined",
+        "detail": {
+          "userId": 1
+        }
+      },
+      "repo": {
+        "acquire": 1,
+        "release": 1
+      },
+      "events": [
+        "repo.acquire",
+        "users.build",
+        "inventory.acquire",
+        "payments.acquire",
+        "risk.build",
+        "checkout.build",
+        "risk.checked:1",
+        "inventory.reserve:1:book",
+        "payments.charge:1",
+        "reservation.release:1:book:failure",
+        "payments.release:failure",
+        "inventory.release:failure",
+        "repo.release:failure",
+        "terminated:failure"
+      ]
+    },
+    {
+      "name": "composed_payment_recovery",
+      "outcome": {
+        "kind": "success",
+        "value": {
+          "user": "pending",
+          "payment": "manual-review",
+          "status": "pending"
+        }
+      },
+      "repo": {
+        "acquire": 1,
+        "release": 1
+      },
+      "events": [
+        "repo.acquire",
+        "users.build",
+        "inventory.acquire",
+        "payments.acquire",
+        "risk.build",
+        "checkout.build",
+        "risk.checked:1",
+        "inventory.reserve:1:book",
+        "payments.charge:1",
+        "reservation.release:1:book:failure",
+        "payment.recovered:1",
+        "payments.release:success",
+        "inventory.release:success",
+        "repo.release:success",
+        "terminated:success"
+      ]
+    },
+    {
+      "name": "composed_payment_replacement",
+      "outcome": {
+        "kind": "success",
+        "value": {
+          "user": "ann",
+          "payment": "sandbox",
+          "status": "paid"
+        }
+      },
+      "repo": {
+        "acquire": 1,
+        "release": 1
+      },
+      "events": [
+        "repo.acquire",
+        "users.build",
+        "inventory.acquire",
+        "risk.build",
+        "checkout.build",
+        "risk.checked:1",
+        "inventory.reserve:1:book",
+        "sandbox.charge:1",
+        "reservation.release:1:book:success",
+        "inventory.release:success",
+        "repo.release:success",
+        "terminated:success"
+      ]
+    },
+    {
+      "name": "composed_parallel_batch",
+      "outcome": {
+        "kind": "success",
+        "value": [
+          {
+            "user": "ann",
+            "payment": "charged:1",
+            "status": "paid"
+          },
+          {
+            "user": "bob",
+            "payment": "charged:2",
+            "status": "paid"
+          }
+        ]
+      },
+      "repo": {
+        "acquire": 1,
+        "release": 1
+      },
+      "events": [
+        "repo.acquire",
+        "users.build",
+        "inventory.acquire",
+        "risk.build",
+        "checkout.build",
+        "risk.checked:1",
+        "inventory.reserve:1:book",
+        "batch.started:1",
+        "risk.checked:2",
+        "inventory.reserve:2:book",
+        "batch.started:2",
+        "batch.release",
+        "batch.finished:1",
+        "reservation.release:1:book:success",
+        "batch.finished:2",
+        "reservation.release:2:book:success",
+        "inventory.release:success",
+        "repo.release:success",
+        "terminated:success"
+      ]
+    },
+    {
+      "name": "composed_batch_cancellation",
+      "outcome": {
+        "kind": "interrupted"
+      },
+      "repo": {
+        "acquire": 1,
+        "release": 1
+      },
+      "events": [
+        "repo.acquire",
+        "users.build",
+        "inventory.acquire",
+        "risk.build",
+        "checkout.build",
+        "risk.checked:1",
+        "inventory.reserve:1:book",
+        "batch.started:1",
+        "risk.checked:2",
+        "inventory.reserve:2:book",
+        "batch.started:2",
+        "batch.cancel.requested",
+        "reservation.release:1:book:interrupt",
+        "reservation.release:2:book:interrupt",
+        "inventory.release:interrupt",
+        "repo.release:interrupt",
+        "batch.cancel.returned",
+        "terminated:interrupt"
+      ]
     }
   ]
 }

@@ -37,6 +37,24 @@
       "codes": [
         "TS2353"
       ]
+    },
+    {
+      "block": "// 7. COMPOSED_REMAINING_ERRORS: recovering PaymentDeclined keeps UserNotFound and OutOfStock",
+      "codes": [
+        "TS2375"
+      ]
+    },
+    {
+      "block": "// 8. COMPOSED_MISSING_SERVICE: Checkout is still required before the layer is provided",
+      "codes": [
+        "TS2379"
+      ]
+    },
+    {
+      "block": "// 9. COMPOSED_WRONG_PAYMENT_ERROR: an inventory error cannot stand in for PaymentDeclined",
+      "codes": [
+        "TS2375"
+      ]
     }
   ]
 }

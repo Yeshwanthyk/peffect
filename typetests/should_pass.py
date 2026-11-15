@@ -3,6 +3,10 @@
 from collections.abc import Mapping
 from typing import Any, Literal, Never, assert_type
 
+from pydantic import ValidationError
+
+from examples.parity import python_app as parity
+from examples.parity import python_composed as composed
 from peffect import (
     Cause,
     Clock,
@@ -423,3 +427,35 @@ assert_type(
     with_dispatcher(lambda d: sync(d.flush).flat_map(lambda _: find(1))),
     Effect[str, NotFound, Never],
 )
+
+
+def parity_application_types() -> None:
+    req = parity.UserRequest(user_id=1)
+    assert_type(parity.AppLive, Layer[parity.Greeter | parity.Auditor])
+    assert_type(
+        parity.handle({"user_id": 1}, parity.greet_user),
+        Effect[str, parity.UserNotFound | ValidationError, Never],
+    )
+    assert_type(parity.greet_or_guest(req), Effect[str, Never, parity.Greeter])
+    replacement = Layer.succeed(
+        parity.Users, parity.UsersService(lambda uid: succeed(parity.User(uid, "test-user")))
+    )
+    assert_type(
+        parity.handle(
+            {"user_id": 1}, parity.greet_user, parity.make_app(replacement, parity.NotifierLive)
+        ),
+        Effect[str, parity.UserNotFound | ValidationError, Never],
+    )
+    # Unlike TS catchTag, a nonmatching class is allowed, but it cannot erase the real error.
+    assert_type(
+        parity.greet_user(req).pipe(catch_tag(ValueError, lambda _: succeed("guest"))),
+        Effect[str, parity.UserNotFound, parity.Greeter],
+    )
+    assert_type(
+        composed.place_or_pending(composed.Order(1)),
+        Effect[composed.Receipt, parity.UserNotFound | composed.OutOfStock, composed.Checkout],
+    )
+    assert_type(
+        provide_layer(composed.make_checkout_app())(composed.place_or_pending(composed.Order(1))),
+        Effect[composed.Receipt, parity.UserNotFound | composed.OutOfStock, Never],
+    )

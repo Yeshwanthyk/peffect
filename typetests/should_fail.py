@@ -3,6 +3,8 @@
 from typing import Any, Never
 
 import peffect
+from examples.parity import python_app as parity
+from examples.parity import python_composed as composed
 from peffect import (
     Context,
     Deferred,
@@ -385,3 +387,33 @@ def scheduler_mistakes() -> None:
     MaxOpsBeforeYield.context("16")
     # 74. WITH_DISPATCHER_NOT_EFFECT: f returns the effect to run
     with_dispatcher(lambda d: d.flush())
+
+
+async def parity_application_mistakes(
+    partial: Layer[parity.Users, Never, parity.Repo],
+) -> None:
+    req = parity.UserRequest(user_id=1)
+    # 75. PARITY_MISSING_DEPENDENCY: Greeter must be provided before running
+    await peffect.run_exit(parity.greet_user(req))
+    # 76. PARITY_LAYER_MISSING_DEPENDENCY: this Users layer still needs Repo
+    parity.make_app(partial, parity.NotifierLive)
+    # 77. PARITY_WRONG_IMPLEMENTATION: get returns User, not str
+    Layer.succeed(parity.Users, parity.UsersService(lambda _: succeed("ann")))
+    # 78. PARITY_UNDECLARED_ERROR: get can fail only with UserNotFound
+    Layer.succeed(parity.Users, parity.UsersService(lambda _: fail(ValueError("db down"))))
+    # 79. PARITY_WRONG_CATCH_LEAVES_ERROR: a nonmatching catch cannot erase UserNotFound
+    _safe: Effect[str, Never, parity.Greeter] = parity.greet_user(req).pipe(
+        catch_tag(ValueError, lambda _: succeed("guest"))
+    )
+    # 80. PARITY_FORGED_SERVICE: RepoService cannot stand in for UsersService
+    parity.Users.context(parity.RepoService(lambda _: None))
+    # 81. COMPOSED_REMAINING_ERRORS: recovering payment failure keeps user and stock failures
+    _no_errors: Effect[composed.Receipt, Never, composed.Checkout] = composed.place_or_pending(
+        composed.Order(1)
+    )
+    # 82. COMPOSED_MISSING_SERVICE: Checkout must still be provided
+    await peffect.run_exit(composed.place_or_pending(composed.Order(1)))
+    # 83. COMPOSED_WRONG_PAYMENT_ERROR: stock errors do not belong to Payments
+    Layer.succeed(composed.Payments, composed.PaymentsService(
+        lambda _: fail(composed.OutOfStock("book"))
+    ))

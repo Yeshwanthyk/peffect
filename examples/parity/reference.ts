@@ -1,10 +1,12 @@
 // Runs each acceptance scenario of docs/FIRST_USABLE_SLICE.md against the pinned Effect v4 and
 // prints one JSON document: per scenario the outcome, Repo acquire/release counts and the ordered
 // lifecycle events. Source-derived application reference, not an upstream test port.
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Schema } from "effect"
+import { Deferred, Effect, Fiber, Layer } from "effect"
 import effectPackage from "effect/package.json" with { type: "json" }
+import { composedScenarios } from "./composed_scenarios.ts"
+import { outcomeOf } from "./outcomes.ts"
 import {
-  events,
+  EventLog,
   exitKind,
   greetAndAudit,
   greetOrGuest,
@@ -14,35 +16,16 @@ import {
   Notifier,
   NotifierLive,
   record,
-  UserNotFound,
   Users,
   UsersLive
 } from "./app.ts"
 
-type Outcome =
-  | { kind: "success"; value: unknown }
-  | { kind: "failure"; category: "validation" | "domain"; tag: string; detail: unknown }
-  | { kind: "interrupted" }
-
-const outcomeOf = (exit: Exit.Exit<unknown, unknown>): Outcome => {
-  if (Exit.isSuccess(exit)) return { kind: "success", value: exit.value }
-  if (Cause.hasInterruptsOnly(exit.cause)) return { kind: "interrupted" }
-  const error = Option.getOrUndefined(Cause.findErrorOption(exit.cause))
-  if (Schema.isSchemaError(error)) {
-    // library-specific diagnostic text: reported, not compared
-    return { kind: "failure", category: "validation", tag: error._tag, detail: { diagnostic_not_compared: error.message } }
-  }
-  if (error instanceof UserNotFound) {
-    return { kind: "failure", category: "domain", tag: error._tag, detail: { userId: error.userId } }
-  }
-  throw new Error(`unclassified exit: ${Cause.pretty(exit.cause)}`)
-}
-
-const count = (prefix: string) => events.filter((e) => e.startsWith(prefix)).length
-
 const scenario = async (name: string, program: Effect.Effect<unknown, unknown>) => {
-  events.length = 0
-  const exit = await Effect.runPromiseExit(program)
+  const events: Array<string> = []
+  const count = (prefix: string) => events.filter((e) => e.startsWith(prefix)).length
+  const exit = await Effect.runPromiseExit(Effect.provideService(program, EventLog, (event) => {
+    events.push(event)
+  }))
   events.push(`terminated:${exitKind(exit)}`)
   return {
     name,
@@ -87,6 +70,8 @@ const results = [
   await scenario("service_replacement", handle({ user_id: 1 }, greetUser, makeApp(TestUsers, NotifierLive))),
   await scenario("cancellation_after_acquire", cancellation)
 ]
+
+for (const [name, program] of composedScenarios) results.push(await scenario(name, program))
 
 console.log(JSON.stringify(
   {

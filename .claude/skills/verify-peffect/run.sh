@@ -42,6 +42,9 @@ step example uv run python examples/quickstart.py
 step context uv run python examples/context.py
 step clock uv run python examples/clock.py
 step scope uv run python examples/scope.py
+step parity uv run python -m examples.parity.compare --output-dir "$out/parity"
+step parity_ts examples/parity/node_modules/.bin/tsc -p examples/parity/tsconfig.json
+step parity_types bun run --cwd examples/parity fixtures/check.ts
 step boundaries uv run python scripts/check_boundaries.py
 step pytest uv run pytest -q
 step ruff uv run ruff check .

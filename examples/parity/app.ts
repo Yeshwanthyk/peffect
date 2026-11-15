@@ -4,11 +4,11 @@ import { Cause, Context, Data, Effect, Exit, Layer, Schema } from "effect"
 
 // -- lifecycle events: the ordered log both runners emit ------------------------------------------
 
-export const events: Array<string> = []
+export const EventLog = Context.Reference<(event: string) => void>("parity/EventLog", {
+  defaultValue: () => () => {}
+})
 export const record = (event: string): Effect.Effect<void> =>
-  Effect.sync(() => {
-    events.push(event)
-  })
+  Effect.flatMap(EventLog, (sink) => Effect.sync(() => sink(event)))
 
 export const exitKind = (exit: Exit.Exit<unknown, unknown>): "success" | "interrupt" | "failure" =>
   Exit.isSuccess(exit) ? "success" : Cause.hasInterruptsOnly(exit.cause) ? "interrupt" : "failure"

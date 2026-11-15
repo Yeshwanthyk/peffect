@@ -4,6 +4,18 @@ Priority set by the user on 2026-11-15: the smallest faithful path through the i
 pieces, maximizing practical use before broad API coverage. This narrows the first delivery
 milestone; the remaining roadmap stays as backlog, not deleted scope.
 
+## Executable delivery
+
+`uv run python -m examples.parity.compare` now runs both real implementations and compares
+16 scenarios, including a deeper checkout application with a shared Layer diamond, three domain
+errors, nested resources, selective recovery, bounded concurrent orders and cancellation.
+Source and commands: `examples/parity/README.md`. Python's Pydantic adapter stays at the
+application boundary; no Schema port or Pydantic dependency in the kernel is claimed.
+
+Runtime parity is scoped to these scenarios. The README records the validation and catch-tag
+typing differences, and the positive/negative fixtures check the supported type guarantees.
+ManagedRuntime and TestClock remain separate work.
+
 ## Acceptance scenario
 
 An existing Pydantic model validates a request into a typed effect. The program consumes typed

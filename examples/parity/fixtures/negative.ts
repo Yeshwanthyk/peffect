@@ -1,6 +1,7 @@
 // Each numbered block is a mistake the compiler must reject. Checked by fixtures/check.ts.
 import { Context, Effect, Layer } from "effect"
 import { greetUser, makeApp, NotifierLive, Repo, Users } from "../app.ts"
+import { Checkout, OutOfStock, Payments, placeOrPending, type Receipt } from "../composed.ts"
 
 // 1. MISSING_DEPENDENCY: greetUser needs Greeter; runPromise needs R = never
 export const unprovided = Effect.runPromise(greetUser({ user_id: 1 }))
@@ -23,3 +24,17 @@ export const wrongTag = greetUser({ user_id: 1 }).pipe(Effect.catchTag("Timeout"
 
 // 6. FORGED_SERVICE: a value of the wrong service cannot stand in for Users
 export const forged = Context.make(Users, { lookup: (_id: number) => undefined })
+
+// 7. COMPOSED_REMAINING_ERRORS: recovering PaymentDeclined keeps UserNotFound and OutOfStock
+export const noErrors: Effect.Effect<Receipt, never, Checkout> =
+  placeOrPending({ userId: 1, sku: "book", card: "declined" })
+
+// 8. COMPOSED_MISSING_SERVICE: Checkout is still required before the layer is provided
+export const noServices = Effect.runPromise(
+  placeOrPending({ userId: 1, sku: "book", card: "declined" })
+)
+
+// 9. COMPOSED_WRONG_PAYMENT_ERROR: an inventory error cannot stand in for PaymentDeclined
+export const wrongPayment = Layer.succeed(Payments, {
+  charge: () => Effect.fail(new OutOfStock({ sku: "book" }))
+})

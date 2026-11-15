@@ -14,3 +14,10 @@ export const recovered: Effect.Effect<string, never, Greeter> = greetOrGuest({ u
 export const testApp = makeApp(Layer.succeed(Users, { get: (id: number) => Effect.succeed({ id, name: "t" }) }), NotifierLive)
 export const replaced: Effect.Effect<string, UserNotFound | Schema.SchemaError> = handle({ user_id: 1 }, greetUser, testApp)
 export const live = AppLive
+
+// Composition keeps the remaining error union and discharges the complete service graph.
+import { Checkout, makeCheckoutApp, OutOfStock, placeOrPending, type Receipt } from "../composed.ts"
+export const pending: Effect.Effect<Receipt, UserNotFound | OutOfStock, Checkout> =
+  placeOrPending({ userId: 1, sku: "book", card: "declined" })
+export const composed: Effect.Effect<Receipt, UserNotFound | OutOfStock> =
+  Effect.provide(pending, makeCheckoutApp())

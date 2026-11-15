@@ -1,9 +1,37 @@
-# TypeScript parity reference
+# EffectJS / Python application parity
 
 Source-derived application reference, not an upstream test port. It runs the
 `docs/FIRST_USABLE_SLICE.md` scenarios on the real pinned Effect v4. Its output is the baseline
-for the Python counterpart. Comparing the two is the parent's harness work; this directory does
-not do it.
+for the Python counterpart. `compare.py` runs both applications fresh and checks their outcomes,
+resource counts and complete ordered event logs. All 16 scenarios currently match.
+
+## Reading and reusing the code
+
+Start with `python_app.py` and `python_composed.py`: these are the application modules.
+The TypeScript counterparts are `app.ts` and `composed.ts`. They use the existing public
+Effect/Context/Layer/resource APIs; no kernel access, type suppressions, casts, or custom
+runtime machinery are needed.
+
+| pattern to reuse | concrete example |
+|---|---|
+| typed service contract and stable tag key | frozen service dataclasses and `Tag` declarations in `python_app.py` |
+| validation at the request edge | `handle`: `attempt(..., ValidationError)` before Layer acquisition |
+| capture dependencies when building a service | `make_checkout` yields services once and returns typed operations |
+| share one dependency across a diamond | `make_checkout_app` and `RiskLive` reuse the same `UsersLive` object |
+| resource lifetime | `acquire_release` for service resources; `acquire_use_release` for a reservation |
+| selective error recovery | `place_or_pending`, with its remaining error union pinned in typetests |
+| per-run state | `EventLog` Reference provided with a fresh sink by the runner; never a cached mutable default |
+| replace a service | `make_checkout_app(payments)`; business logic is unchanged |
+
+`python_scenarios.py` / `composed_scenarios.ts` are deterministic test fixtures, not application
+services. The two reference runners own observation and serialization. `compare.py` is a test
+tool. Keep that separation when copying the example. Its inventory and payment implementations
+are deliberately in-memory; replace them with real adapters for an actual application.
+
+To use this as a source reference, pin the peffect revision as well as the Effect vendor revision,
+retain the README's limits, and rerun the comparison plus typing checks after adapting it.
+This checkout does not yet contain a project LICENSE; a public redistribution invitation needs
+the owner's licensing decision. This example does not supply that permission.
 
 ## Pinned source
 
@@ -19,6 +47,21 @@ not do it.
 - Runtime: bun 1.3.13 (`/opt/homebrew/bin/bun`).
 
 ## Commands
+
+From the repository root, run the complete runtime comparison:
+
+```sh
+uv run python -m examples.parity.compare
+uv run python -m examples.parity.compare --output-dir /tmp/peffect-parity
+uv run python -m examples.parity.python_reference
+uv run pytest -q tests/test_application_parity.py tests/test_types.py
+```
+
+The comparator checks the vendor SHA, source modifications and actual resolved Effect import.
+It never reads captured output as a substitute for running either application. It writes raw
+outputs plus `comparison.json` to the printed directory. A mismatch is a nonzero exit with a
+diff. Only validation error names (`SchemaError` / `ValidationError`) and diagnostic text are
+normalized. Domain errors, JSON value types, counts and event order are compared exactly.
 
 Run each from `examples/parity/`:
 
@@ -62,6 +105,34 @@ Build order in every app run: `repo.acquire`, `users.build`, `greeter.build`, `a
 That order is what the pinned `Layer.mergeAll` produced here. A port must reproduce it or record
 the difference; it must not be normalized away. The output contains no fiber ids or stack traces.
 
+## Composed checkout (`composed.ts`, `python_composed.py`)
+
+The second application adds Inventory, Payments, Risk and Checkout service tags. Checkout needs
+all four dependencies: Users, Inventory, Payments and Risk. Risk itself is built with the same
+UsersLive layer, so the graph contains a real diamond. MemoMap must share Users and its Repo
+across both paths: every checkout scenario acquires and releases the Repo exactly once.
+
+Repo, Inventory and Payments have Layer-scoped lifetimes. Each order also uses
+`acquireUseRelease` / `acquire_use_release` for a reservation. The error channel is the union
+`UserNotFound | OutOfStock | PaymentDeclined`. Recovery catches only PaymentDeclined and the
+typing fixtures require both other errors to remain.
+
+| scenario | result and lifecycle assertion |
+|---|---|
+| composed_success | paid receipt; reservation closes before the three service resources |
+| composed_user_failure | UserNotFound; no reservation or payment attempted |
+| composed_stock_failure | OutOfStock; no payment or reservation release after failed acquisition |
+| composed_payment_failure | PaymentDeclined; reservation and all resources close with failure |
+| composed_payment_recovery | pending receipt; reservation sees failure, outer resources see success |
+| composed_payment_replacement | sandbox Payments implementation; unchanged checkout logic |
+| composed_parallel_batch | two workers reach Deferred gates before release; results retain input order |
+| composed_batch_cancellation | both reservations and shared resources release before cancellation returns |
+
+The batches use concurrency 2. Deferred gates establish overlap and cancellation timing; there
+are no sleeps or fixed-yield guesses. A wall-clock watchdog only prevents a broken run hanging.
+These are deterministic in-memory application services, not real inventory/payment clients.
+No stock-accounting, database transaction, network, or external payment guarantee is claimed.
+
 ## Typing fixtures (`fixtures/`, `fixtures/check.output.json`)
 
 `check.ts` compiles both files with the TypeScript compiler API and this tsconfig.
@@ -77,6 +148,15 @@ The negative blocks and the diagnostic each produced:
 4. UNDECLARED_ERROR: TS2322.
 5. UNKNOWN_ERROR_TAG: TS2345.
 6. FORGED_SERVICE: TS2353.
+7. COMPOSED_REMAINING_ERRORS: recovering payment failure cannot erase user/stock errors.
+8. COMPOSED_MISSING_SERVICE: Checkout still needs to be provided.
+9. COMPOSED_WRONG_PAYMENT_ERROR: Payments cannot declare an inventory failure.
+
+Python counterparts live in `typetests/should_pass.py` and blocks 75–83 of `should_fail.py`.
+The existing per-block harness checks each rejection. One difference is explicit: Python
+`catch_tag` accepts a nonmatching error class but preserves the original error channel; TS
+rejects an unknown tag at the call. Python block 79 checks that it cannot falsely erase the error,
+and the positive fixture pins the retained type. This is sound but not identical API typing.
 
 The checker was probed both ways:
 - Making block 3 valid turned the check red (exit 1).
@@ -85,7 +165,10 @@ The checker was probed both ways:
 ## Limits
 
 - This is one application, not schema equivalence. Effect Schema and Pydantic keep their own
-  diagnostics.
+  diagnostics. Python's StrictInt also rejects an integral Python float such as `1.0`; JS has
+  a single number type. The acceptance scenarios use JSON integer values, not that distinction.
 - The layer-build order and the release-before-`cancel.returned` order come from one runtime
   (bun). They were not re-run under node.
 - `negative.ts` is excluded from the `tsc -p` gate on purpose; `check.ts` is its gate.
+- This does not implement ManagedRuntime, TestClock, or any new kernel primitive. The comparison
+  establishes these 16 application traces, not arbitrary program equivalence.
