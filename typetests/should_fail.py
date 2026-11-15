@@ -3,7 +3,21 @@
 from typing import Any, Never
 
 import peffect
-from peffect import Context, Effect, Fiber, Reference, Tag, catch_tag, fail, gen, provide, succeed
+from peffect import (
+    Context,
+    Effect,
+    Fiber,
+    Reference,
+    Scope,
+    ScopeService,
+    Success,
+    Tag,
+    catch_tag,
+    fail,
+    gen,
+    provide,
+    succeed,
+)
 
 
 class NotFound(Exception): ...
@@ -121,3 +135,23 @@ def overwrite_provider(alias: provide[Never]) -> None:
 def delete_provider(alias: provide[Users]) -> None:
     # 18. PROVIDER_DELETED: provision is immutable
     del alias.ctx
+
+
+async def unscoped() -> None:
+    # 19. SCOPE_UNPROVIDED: `scope` requires Scope; run needs R = Never
+    await peffect.run(peffect.scope)
+
+
+def close_service(service: ScopeService) -> None:
+    # 20. SERVICE_CLOSED: only the Closeable's maker can close it
+    Scope.close(service, Success(None))
+
+
+def finalizer_requires(service: ScopeService) -> None:
+    # 21. FINALIZER_REQUIRES: a finalizer's R is Never
+    Scope.add_finalizer(service, Users().use())
+
+
+def strategy_replaced(service: ScopeService) -> None:
+    # 22. STRATEGY_REPLACED: strategy is read-only
+    service.strategy = "parallel"

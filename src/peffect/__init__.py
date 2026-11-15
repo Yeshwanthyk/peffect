@@ -44,11 +44,13 @@ from peffect.core import (
     yield_now,
 )
 from peffect.fiber import Fiber, fork, fork_daemon, run, run_exit
+from peffect.scope import Closeable, Scope, ScopeService, scope, scoped
 
 __all__ = [
     "Cause",
     "Clock",
     "ClockService",
+    "Closeable",
     "Context",
     "ContextMap",
     "DefectError",
@@ -64,6 +66,8 @@ __all__ = [
     "Interrupted",
     "MissingService",
     "Reference",
+    "Scope",
+    "ScopeService",
     "Success",
     "Tag",
     "async_",
@@ -92,6 +96,8 @@ __all__ = [
     "provide",
     "run",
     "run_exit",
+    "scope",
+    "scoped",
     "sleep",
     "succeed",
     "suspend",

@@ -6,11 +6,14 @@ from peffect import (
     Cause,
     Clock,
     ClockService,
+    Closeable,
     Context,
     Effect,
     Exit,
     Fiber,
     Reference,
+    Scope,
+    ScopeService,
     Tag,
     catch_all,
     catch_tag,
@@ -25,10 +28,12 @@ from peffect import (
     on_error,
     on_interrupt,
     provide,
+    scoped,
     sleep,
     succeed,
     sync,
 )
+from peffect import scope as current_scope  # Effect.scope
 
 
 class NotFound(Exception): ...
@@ -195,3 +200,14 @@ class FixedClock:
 
 fixed: ClockService = FixedClock()  # structural: any class with the members is a ClockService
 assert_type(provide(Clock.context(fixed))(sleep(1)), Effect[None, Never, Never])
+
+
+# Scope: `scope` requires Scope, `scoped` discharges exactly it, finalizers take any Exit
+assert_type(Scope.make(), Effect[Closeable, Never, Never])
+assert_type(current_scope, Effect[ScopeService, Never, Scope])
+assert_type(scoped(current_scope), Effect[ScopeService, Never, Never])
+assert_type(scoped(current_scope.flat_map(lambda _: Users().use())), Effect[Repo, Never, Users])
+made: ScopeService = Scope.make_unsafe()  # a Closeable is a ScopeService
+assert_type(Scope.add_finalizer_exit(made, lambda ex: ex), Effect[None, Never, Never])
+assert_type(Scope.fork(made), Effect[Closeable, Never, Never])
+assert_type(Scope.provide(made)(current_scope), Effect[ScopeService, Never, Never])

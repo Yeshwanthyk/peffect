@@ -81,6 +81,10 @@ an AGENTS.md section with the idiom and the mistakes it prevents.
 - Kernel prerequisites for Scope/TestClock (2026-11-15): `fork`/`fork_daemon(start_immediately=True)`
   (v4 forkUnsafe immediate start) and `exit_` (v4 `Effect.exit`), ported with their upstream
   tests in `tests/test_fiber_start_upstream.py`; formal model updated (nested immediate drive).
+- Tier 2, Scope, sequential (2026-11-15): `scope.py` (`Scope` tag and module functions,
+  `Closeable`, `ScopeService`, `scope`, `scoped`) over public combinators only; batch E green,
+  rows S1–S8, typetests. Pending: parallel close (batch G; raises NotImplementedError for now),
+  `Scope.use`, batch F, lesson 06. Unmodeled by the formal kernel.
 
 ## Order and why
 

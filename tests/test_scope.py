@@ -8,12 +8,9 @@ Below the upstream tests: the Scope.ts doc examples that add coverage the tests 
 have (the rest repeat it), then source-derived cases where neither has a test, each labelled.
 
 Adaptations used throughout:
-- Scope isn't built yet. Every Scope name is looked up when the test runs (`upcoming`), so until
-  it exists each test fails with AttributeError instead of the file failing to import. The
-  typed wrappers below (`close`, `add_finalizer`, ...) are where the real imports go once it
-  lands. Names are upstream's in snake_case: `Scope.make_unsafe`, `Scope.add_finalizer`,
+- Names are upstream's in snake_case: `Scope.make_unsafe`, `Scope.add_finalizer`,
   `Scope.add_finalizer_exit`, `Scope.close`, `Scope.close_unsafe`, `Scope.fork_unsafe`,
-  `scoped`, `scope` (Effect.scope) and `exit_` (Effect.exit).
+  `scoped`, `scope` (Effect.scope, imported here as `current_scope`) and `exit_` (Effect.exit).
 - `scope.state._tag` is `scope.state.tag`, with upstream's values "Empty", "Open", "Closed".
 - `Deferred` is tier 3. The tests use it only to signal between the test and a finalizer, so
   `Signal` below stands in: a one-shot latch over the public `async_`, nothing else.
@@ -27,10 +24,8 @@ Adaptations used throughout:
   ambient Scope and TestClock are not used by these cases, so they run under plain `run`.
 """
 
-from collections.abc import Callable
 from typing import Any, Never
 
-import peffect
 from peffect import (
     Cause,
     Die,
@@ -39,81 +34,36 @@ from peffect import (
     Fail,
     Failure,
     Fiber,
+    Scope,
+    ScopeService,
     Success,
     async_,
+    exit_,
     fail,
     fork,
     gen,
     run,
     run_exit,
+    scoped,
     succeed,
     suspend,
     sync,
     uninterruptible,
+    update_context,
     yield_now,
 )
+from peffect import scope as current_scope
 from peffect.context import MissingService
 from peffect.core import AnyFiber, Resume, WithFiber
+from peffect.scope import Closed, Open
 
 VOID: Exit[None, Never] = Success(None)
 
 
-def upcoming(name: str) -> Any:
-    """A name upstream has and peffect doesn't yet: AttributeError until it does."""
-    return getattr(peffect, name)
+# -- Scope API ------------------------------------------------------------------------------------
 
 
-# -- Scope API, typed; the bodies become imports once Scope exists ------------------------------
-
-
-def make_unsafe(strategy: str = "sequential") -> Any:
-    return upcoming("Scope").make_unsafe(strategy)
-
-
-def make(strategy: str = "sequential") -> Effect[Any, Never, Never]:
-    return upcoming("Scope").make(strategy)
-
-
-def scope_fork(parent: Any, strategy: str = "sequential") -> Effect[Any, Never, Never]:
-    return upcoming("Scope").fork(parent, strategy)
-
-
-def provide_scope(scope: Any) -> Callable[[Effect[Any, Any, Any]], Effect[Any, Any, Never]]:
-    return upcoming("Scope").provide(scope)
-
-
-def fork_unsafe(parent: Any) -> Any:
-    return upcoming("Scope").fork_unsafe(parent)
-
-
-def add_finalizer(scope: Any, finalizer: Effect[Any, Any, Any]) -> Effect[None, Never, Never]:
-    return upcoming("Scope").add_finalizer(scope, finalizer)
-
-
-def add_finalizer_exit(
-    scope: Any, finalizer: Callable[[Exit[Any, Any]], Effect[Any, Any, Any]]
-) -> Effect[None, Never, Never]:
-    return upcoming("Scope").add_finalizer_exit(scope, finalizer)
-
-
-def close(scope: Any, exit_: Exit[Any, Any]) -> Effect[None, Never, Never]:
-    return upcoming("Scope").close(scope, exit_)
-
-
-def close_unsafe(scope: Any, exit_: Exit[Any, Any]) -> Effect[None, Never, Never] | None:
-    return upcoming("Scope").close_unsafe(scope, exit_)
-
-
-def exit_of[A, E](eff: Effect[A, E, Any]) -> Effect[Exit[A, E], Never, Never]:
-    return upcoming("exit_")(eff)
-
-
-def upcoming_scope() -> Effect[Any, Never, Any]:
-    """`Effect.scope`: the Scope service of the enclosing `scoped`."""
-    return upcoming("scope")
-
-
-def state_tag(scope: Any) -> str:
+def state_tag(scope: ScopeService) -> str:
     return scope.state.tag
 
 
@@ -175,7 +125,7 @@ async def test_sequential_completes_a_single_finalizer_when_its_callback_interru
     Upstream aborts the `runPromiseExit` signal from inside the finalizer callback, which
     interrupts the fiber running `close`. peffect's runner takes no signal, so the callback
     interrupts that same fiber directly (as D4): the root fiber is captured when it starts."""
-    scope = make_unsafe("sequential")
+    scope = Scope.make_unsafe("sequential")
     root: list[AnyFiber] = []
     cleaned: list[bool] = []
 
@@ -183,11 +133,11 @@ async def test_sequential_completes_a_single_finalizer_when_its_callback_interru
         root[0].interrupt_unsafe()  # controller.abort()
         return sync(lambda: cleaned.append(True))
 
-    await run(add_finalizer_exit(scope, finalizer))
+    await run(Scope.add_finalizer_exit(scope, finalizer))
 
     def start(fiber: AnyFiber) -> Effect[None, Never, Never]:
         root.append(fiber)
-        return yield_now.flat_map(lambda _: close(scope, VOID))
+        return yield_now.flat_map(lambda _: Scope.close(scope, VOID))
 
     await run_exit(WithFiber(start))
     assert cleaned == [True]
@@ -195,13 +145,13 @@ async def test_sequential_completes_a_single_finalizer_when_its_callback_interru
 
 async def test_sequential_completes_direct_close_after_interruption():
     """Scope.test.ts:39 "sequential: completes direct close after interruption"."""
-    scope = make_unsafe("sequential")
+    scope = Scope.make_unsafe("sequential")
     started, release = Signal(), Signal()
     ran: list[str] = []
 
     @gen
     def program():
-        yield from add_finalizer(scope, sync(lambda: ran.append("second")))
+        yield from Scope.add_finalizer(scope, sync(lambda: ran.append("second")))
 
         @gen
         def first():
@@ -209,8 +159,10 @@ async def test_sequential_completes_direct_close_after_interruption():
             yield from release.await_()
             ran.append("first")
 
-        yield from add_finalizer(scope, first())
-        closing: Fiber[None, Never] = yield from fork(close(scope, VOID), start_immediately=True)
+        yield from Scope.add_finalizer(scope, first())
+        closing: Fiber[None, Never] = yield from fork(
+            Scope.close(scope, VOID), start_immediately=True
+        )
         yield from started.await_()
         interrupting: Fiber[None, Never] = yield from fork(
             closing.interrupt(), start_immediately=True
@@ -220,7 +172,7 @@ async def test_sequential_completes_direct_close_after_interruption():
         yield from release.succeed()
         yield from interrupting.join()
         yield from closing.await_()
-        yield from close(scope, VOID)
+        yield from Scope.close(scope, VOID)
 
     await run(program())
     assert ran == ["first", "second"]
@@ -229,13 +181,13 @@ async def test_sequential_completes_direct_close_after_interruption():
 async def test_close_unsafe_runs_finalizers_when_its_returned_effect_is_masked_by_the_caller():
     """Scope.test.ts:81 "closeUnsafe runs finalizers when its returned effect is masked by the
     caller"."""
-    scope = make_unsafe()
+    scope = Scope.make_unsafe()
     started, release = Signal(), Signal()
     ran: list[str] = []
 
     @gen
     def program():
-        yield from add_finalizer(scope, sync(lambda: ran.append("second")))
+        yield from Scope.add_finalizer(scope, sync(lambda: ran.append("second")))
 
         @gen
         def first():
@@ -243,8 +195,8 @@ async def test_close_unsafe_runs_finalizers_when_its_returned_effect_is_masked_b
             yield from release.await_()
             ran.append("first")
 
-        yield from add_finalizer(scope, first())
-        finalizers = close_unsafe(scope, VOID)
+        yield from Scope.add_finalizer(scope, first())
+        finalizers = Scope.close_unsafe(scope, VOID)
         assert finalizers is not None
         closing: Fiber[None, Never] = yield from fork(
             uninterruptible(finalizers), start_immediately=True
@@ -265,7 +217,7 @@ async def test_close_unsafe_runs_finalizers_when_its_returned_effect_is_masked_b
 
 async def test_sequential_continues_and_awaits_remaining_finalizers_after_a_throw():
     """Scope.test.ts:124 "sequential: continues and awaits remaining finalizers after a throw"."""
-    scope = make_unsafe("sequential")
+    scope = Scope.make_unsafe("sequential")
     log: list[str] = []
 
     @gen
@@ -279,9 +231,9 @@ async def test_sequential_continues_and_awaits_remaining_finalizers_after_a_thro
 
     @gen
     def program():
-        yield from add_finalizer(scope, remaining())
-        yield from add_finalizer_exit(scope, throwing)
-        return (yield from exit_of(close(scope, VOID)))
+        yield from Scope.add_finalizer(scope, remaining())
+        yield from Scope.add_finalizer_exit(scope, throwing)
+        return (yield from exit_(Scope.close(scope, VOID)))
 
     ex = await run(program())
     assert log == ["throwing", "remaining"]
@@ -296,11 +248,11 @@ async def test_a_sole_throwing_finalizer_keeps_the_scoped_effects_failure():
 
     @gen
     def body():
-        scope = yield from upcoming_scope()
-        yield from add_finalizer_exit(scope, throwing)
+        scope = yield from current_scope
+        yield from Scope.add_finalizer_exit(scope, throwing)
         return (yield from fail("error"))
 
-    ex = await run(exit_of(upcoming("scoped")(body())))
+    ex = await run(exit_(scoped(body())))
     assert reasons(ex) == ["die:error", "die:release"]
 
 
@@ -309,24 +261,24 @@ async def test_a_sole_throwing_finalizer_keeps_the_scoped_effects_failure():
 
 async def test_closing_a_child_removes_it_from_the_parent():
     """Scope.test.ts:159 "closing a child removes it from the parent"."""
-    parent = make_unsafe()
-    child = fork_unsafe(parent)
+    parent = Scope.make_unsafe()
+    child = Scope.fork_unsafe(parent)
     assert state_tag(child) == "Empty"
     assert state_tag(parent) == "Open"
-    await run(close(child, VOID))
+    await run(Scope.close(child, VOID))
     assert state_tag(parent) == "Empty"
 
 
 async def test_a_throwing_child_finalizer_does_not_leave_the_child_in_its_parent():
     """Scope.test.ts:169 "a throwing child finalizer does not leave the child in its parent"."""
-    parent = make_unsafe()
-    child = fork_unsafe(parent)
+    parent = Scope.make_unsafe()
+    child = Scope.fork_unsafe(parent)
 
     def throwing(_: Exit[Any, Any]) -> Effect[None, Never, Never]:
         raise RuntimeError("boom")
 
-    await run(add_finalizer_exit(child, throwing))
-    result = await run(exit_of(close(child, VOID)))
+    await run(Scope.add_finalizer_exit(child, throwing))
+    result = await run(exit_(Scope.close(child, VOID)))
     assert isinstance(result, Failure)
     assert state_tag(child) == "Closed"
     assert state_tag(parent) == "Empty"
@@ -334,14 +286,18 @@ async def test_a_throwing_child_finalizer_does_not_leave_the_child_in_its_parent
 
 async def test_an_interrupted_close_does_not_leave_the_child_in_its_parent():
     """Scope.test.ts:182 "an interrupted close does not leave the child in its parent"."""
-    parent = make_unsafe()
-    child = fork_unsafe(parent)
+    parent = Scope.make_unsafe()
+    child = Scope.fork_unsafe(parent)
     entered, release = Signal(), Signal()
 
     @gen
     def program():
-        yield from add_finalizer(child, entered.succeed().flat_map(lambda _: release.await_()))
-        fiber: Fiber[None, Never] = yield from fork(close(child, VOID), start_immediately=True)
+        yield from Scope.add_finalizer(
+            child, entered.succeed().flat_map(lambda _: release.await_())
+        )
+        fiber: Fiber[None, Never] = yield from fork(
+            Scope.close(child, VOID), start_immediately=True
+        )
         yield from entered.await_()
         interrupting: Fiber[None, Never] = yield from fork(
             fiber.interrupt(), start_immediately=True
@@ -357,17 +313,17 @@ async def test_an_interrupted_close_does_not_leave_the_child_in_its_parent():
 async def test_closing_the_parent_closes_the_child_with_the_parents_exit_only_once():
     """Scope.test.ts:201 "closing the parent closes the child with the parent's exit only
     once"."""
-    parent = make_unsafe()
-    child = fork_unsafe(parent)
+    parent = Scope.make_unsafe()
+    child = Scope.fork_unsafe(parent)
     exits: list[Exit[Any, Any]] = []
 
     def record(ex: Exit[Any, Any]) -> Effect[None, Never, Never]:
         return sync(lambda: exits.append(ex))
 
     failure: Exit[Never, str] = Failure(Cause.fail("parent failed"))
-    await run(add_finalizer_exit(child, record))
-    await run(close(parent, failure))
-    await run(close(child, VOID))
+    await run(Scope.add_finalizer_exit(child, record))
+    await run(Scope.close(parent, failure))
+    await run(Scope.close(child, VOID))
     assert exits == [failure]
 
 
@@ -379,9 +335,9 @@ async def test_doc_scope_make_starts_empty_with_its_strategy_and_closes():
 
     @gen
     def program():
-        scope = yield from make("sequential")
+        scope = yield from Scope.make("sequential")
         initial = (scope.strategy, state_tag(scope))
-        yield from close(scope, VOID)
+        yield from Scope.close(scope, VOID)
         return initial, state_tag(scope)
 
     assert await run(program()) == (("sequential", "Empty"), "Closed")
@@ -389,10 +345,11 @@ async def test_doc_scope_make_starts_empty_with_its_strategy_and_closes():
 
 async def test_doc_open_state_holds_its_first_finalizer_inline():
     """Scope.ts:139, `State.Open` example: one finalizer is stored inline, not in the map."""
-    scope = make_unsafe()
-    await run(add_finalizer(scope, succeed(None)))
-    assert state_tag(scope) == "Open"
-    assert scope.state.finalizer is not None
+    scope = Scope.make_unsafe()
+    await run(Scope.add_finalizer(scope, succeed(None)))
+    state = scope.state
+    assert isinstance(state, Open)
+    assert state.finalizer is not None
 
 
 async def test_doc_closed_state_keeps_the_exit_it_was_closed_with():
@@ -401,9 +358,10 @@ async def test_doc_closed_state_keeps_the_exit_it_was_closed_with():
 
     @gen
     def program():
-        scope = yield from make()
-        yield from close(scope, done)
-        return scope.state.exit if state_tag(scope) == "Closed" else None
+        scope = yield from Scope.make()
+        yield from Scope.close(scope, done)
+        state = scope.state
+        return state.exit if isinstance(state, Closed) else None
 
     assert await run(program()) is done
 
@@ -414,10 +372,10 @@ async def test_doc_scoped_closes_its_scope_on_success():
 
     @gen
     def program():
-        scope = yield from upcoming_scope()
-        yield from add_finalizer(scope, finalizer_log(cleanups, "Cleanup"))
+        scope = yield from current_scope
+        yield from Scope.add_finalizer(scope, finalizer_log(cleanups, "Cleanup"))
 
-    await run(upcoming("scoped")(program()))
+    await run(scoped(program()))
     assert cleanups == ["Cleanup"]
 
 
@@ -427,15 +385,15 @@ async def test_doc_provide_hands_a_caller_managed_scope_to_the_effect():
 
     @gen
     def program():
-        scope = yield from upcoming_scope()
-        yield from add_finalizer(scope, finalizer_log(events, "cleanup"))
+        scope = yield from current_scope
+        yield from Scope.add_finalizer(scope, finalizer_log(events, "cleanup"))
         events.append("working")
 
     @gen
     def with_scope():
-        scope = yield from make()
-        yield from provide_scope(scope)(program())
-        yield from close(scope, VOID)
+        scope = yield from Scope.make()
+        yield from Scope.provide(scope)(program())
+        yield from Scope.close(scope, VOID)
 
     await run(with_scope())
     assert events == ["working", "cleanup"]
@@ -448,11 +406,11 @@ async def test_doc_close_runs_three_finalizers_newest_first_after_the_work():
 
     @gen
     def program():
-        scope = yield from make()
+        scope = yield from Scope.make()
         for n in (1, 2, 3):
-            yield from add_finalizer(scope, finalizer_log(events, f"cleanup {n}"))
+            yield from Scope.add_finalizer(scope, finalizer_log(events, f"cleanup {n}"))
         events.append("work")
-        yield from close(scope, VOID)
+        yield from Scope.close(scope, VOID)
 
     await run(program())
     assert events == ["work", "cleanup 3", "cleanup 2", "cleanup 1"]
@@ -465,12 +423,12 @@ async def test_doc_fork_effect_child_closes_before_its_parent():
 
     @gen
     def program():
-        parent = yield from make("sequential")
-        yield from add_finalizer(parent, finalizer_log(cleanups, "parent"))
-        child = yield from scope_fork(parent, "parallel")
-        yield from add_finalizer(child, finalizer_log(cleanups, "child"))
-        yield from close(child, VOID)
-        yield from close(parent, VOID)
+        parent = yield from Scope.make("sequential")
+        yield from Scope.add_finalizer(parent, finalizer_log(cleanups, "parent"))
+        child = yield from Scope.fork(parent, "parallel")
+        yield from Scope.add_finalizer(child, finalizer_log(cleanups, "child"))
+        yield from Scope.close(child, VOID)
+        yield from Scope.close(parent, VOID)
 
     await run(program())
     assert cleanups == ["child", "parent"]
@@ -482,11 +440,11 @@ async def test_doc_fork_effect_child_closes_before_its_parent():
 async def test_source_a_finalizer_added_after_close_runs_at_once_with_the_closed_exit():
     """scopeAddFinalizerExit, internal/effect.ts:4123-4130: on a Closed scope the finalizer is
     called immediately with `scope.state.exit`, and nothing is registered."""
-    scope = make_unsafe()
+    scope = Scope.make_unsafe()
     failure: Exit[Never, str] = Failure(Cause.fail("closed"))
     exits: list[Exit[Any, Any]] = []
-    await run(close(scope, failure))
-    await run(add_finalizer_exit(scope, lambda ex: sync(lambda: exits.append(ex))))
+    await run(Scope.close(scope, failure))
+    await run(Scope.add_finalizer_exit(scope, lambda ex: sync(lambda: exits.append(ex))))
     assert len(exits) == 1 and exits[0] is failure
     assert state_tag(scope) == "Closed"
 
@@ -494,14 +452,15 @@ async def test_source_a_finalizer_added_after_close_runs_at_once_with_the_closed
 async def test_source_forking_a_closed_parent_gives_a_child_closed_with_the_parents_exit():
     """scopeForkUnsafe, internal/effect.ts:4113-4116: the child takes the parent's Closed state
     and is not registered with it; a finalizer added to the child runs at once with that exit."""
-    parent = make_unsafe()
+    parent = Scope.make_unsafe()
     failure: Exit[Never, str] = Failure(Cause.fail("parent closed"))
-    await run(close(parent, failure))
-    child = fork_unsafe(parent)
-    assert state_tag(child) == "Closed"
-    assert child.state.exit is failure
+    await run(Scope.close(parent, failure))
+    child = Scope.fork_unsafe(parent)
+    state = child.state
+    assert isinstance(state, Closed)
+    assert state.exit is failure
     exits: list[Exit[Any, Any]] = []
-    await run(add_finalizer_exit(child, lambda ex: sync(lambda: exits.append(ex))))
+    await run(Scope.add_finalizer_exit(child, lambda ex: sync(lambda: exits.append(ex))))
     assert len(exits) == 1 and exits[0] is failure
     assert state_tag(parent) == "Closed"
 
@@ -515,14 +474,17 @@ async def test_source_direct_close_keeps_every_failure_reason_and_elects_no_defe
     def throwing(_: Exit[Any, Any]) -> Effect[None, Never, Never]:
         raise RuntimeError("release")
 
-    scope = make_unsafe()
+    scope = Scope.make_unsafe()
+
+    boom: Exit[Never, str] = Failure(Cause.fail("boom"))
 
     @gen
     def program():
-        yield from add_finalizer(scope, fail("boom"))
-        yield from add_finalizer(scope, fail("boom"))
-        yield from add_finalizer_exit(scope, throwing)
-        return (yield from exit_of(close(scope, VOID)))
+        # a finalizer is `Exit -> Effect<unknown>`; handing back the Exit it gets fails with it
+        yield from Scope.add_finalizer_exit(scope, lambda ex: ex)
+        yield from Scope.add_finalizer_exit(scope, lambda ex: ex)
+        yield from Scope.add_finalizer_exit(scope, throwing)
+        return (yield from exit_(Scope.close(scope, boom)))
 
     ex = await run(program())
     assert reasons(ex) == ["die:release", "fail:boom", "fail:boom"]
@@ -535,14 +497,23 @@ async def test_source_scoped_restores_the_context_before_running_finalizers():
     seen: list[Exit[Any, Any]] = []
 
     def record(_: Exit[Any, Any]) -> Effect[None, Never, Never]:
-        return exit_of(upcoming_scope()).flat_map(lambda ex: sync(lambda: seen.append(ex)))
+        # A finalizer can't require Scope (its R is Never). So the read runs in the context this
+        # finalizer actually has (`here`, put back by update_context), and the outer provide only
+        # discharges Scope from R; the placeholder it installs is replaced before the read.
+        def read_here(fiber: AnyFiber) -> Effect[None, Never, Never]:
+            here = fiber.context
+            read = update_context(exit_(current_scope), lambda _: here)
+            placeholder = Scope.provide(Scope.make_unsafe())(read)
+            return placeholder.flat_map(lambda ex: sync(lambda: seen.append(ex)))
+
+        return WithFiber(read_here)
 
     @gen
     def body():
-        scope = yield from upcoming_scope()
-        yield from add_finalizer_exit(scope, record)
+        scope = yield from current_scope
+        yield from Scope.add_finalizer_exit(scope, record)
 
-    await run(upcoming("scoped")(body()))
+    await run(scoped(body()))
     assert len(seen) == 1
     ex = seen[0]
     assert isinstance(ex, Failure)

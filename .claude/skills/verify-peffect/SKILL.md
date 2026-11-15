@@ -30,7 +30,7 @@ driven and the run exits 1.
 ```
 
 Steps, in order: `doctor`, `example` (`examples/quickstart.py`), `context`
-(`examples/context.py`), `clock` (`examples/clock.py`), `boundaries`
+(`examples/context.py`), `clock` (`examples/clock.py`), `scope` (`examples/scope.py`), `boundaries`
 (`scripts/check_boundaries.py` on `src/peffect` outside the kernel, and `examples/`), `pytest`
 (all tests, including the boundary probes in `tests/test_boundaries.py`), `ruff check .`, and
 `pyright`. A failing step doesn't stop the later ones, so one run shows every failure.
