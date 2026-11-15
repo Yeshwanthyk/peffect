@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "exactOptionalPropertyTypes": true,
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "types": [],
+    "paths": {
+      "effect/package.json": ["../../vendor/effect-v4/packages/effect/package.json"],
+      "effect": ["../../vendor/effect-v4/packages/effect/src/index.ts"],
+      "effect/*": ["../../vendor/effect-v4/packages/effect/src/*.ts"]
+    }
+  },
+  "include": ["*.ts", "fixtures/positive.ts", "fixtures/check.ts"]
+}

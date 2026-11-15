@@ -1,0 +1,42 @@
+{
+  "typescript": "6.0.3",
+  "positive_diagnostics": 0,
+  "negative": [
+    {
+      "block": "// 1. MISSING_DEPENDENCY: greetUser needs Greeter; runPromise needs R = never",
+      "codes": [
+        "TS2379"
+      ]
+    },
+    {
+      "block": "// 2. LAYER_MISSING_DEPENDENCY: this Users layer still needs Repo",
+      "codes": [
+        "TS2379"
+      ]
+    },
+    {
+      "block": "// 3. WRONG_IMPLEMENTATION: get must succeed with a User, not a string",
+      "codes": [
+        "TS2322"
+      ]
+    },
+    {
+      "block": "// 4. UNDECLARED_ERROR: get may fail only with UserNotFound",
+      "codes": [
+        "TS2322"
+      ]
+    },
+    {
+      "block": "// 5. UNKNOWN_ERROR_TAG: greetUser has no error tagged \"Timeout\"",
+      "codes": [
+        "TS2345"
+      ]
+    },
+    {
+      "block": "// 6. FORGED_SERVICE: a value of the wrong service cannot stand in for Users",
+      "codes": [
+        "TS2353"
+      ]
+    }
+  ]
+}

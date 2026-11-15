@@ -1,0 +1,176 @@
+{
+  "reference": {
+    "label": "source-derived application reference (not an upstream test port)",
+    "effect_version": "4.1.4",
+    "effect_source": "vendor/effect-v4/packages/effect/src, submodule commit 289a53f7b1fc40049219c6e69022db2fb859c356"
+  },
+  "scenarios": [
+    {
+      "name": "success",
+      "outcome": {
+        "kind": "success",
+        "value": "hello ann"
+      },
+      "repo": {
+        "acquire": 1,
+        "release": 1
+      },
+      "events": [
+        "request.valid",
+        "repo.acquire",
+        "users.build",
+        "greeter.build",
+        "auditor.build",
+        "notify:hello ann",
+        "repo.release:success",
+        "terminated:success"
+      ]
+    },
+    {
+      "name": "invalid_input_range",
+      "outcome": {
+        "kind": "failure",
+        "category": "validation",
+        "tag": "SchemaError",
+        "detail": {
+          "diagnostic_not_compared": "Expected a value greater than or equal to 1\n  at [\"user_id\"]"
+        }
+      },
+      "repo": {
+        "acquire": 0,
+        "release": 0
+      },
+      "events": [
+        "terminated:failure"
+      ]
+    },
+    {
+      "name": "invalid_input_type",
+      "outcome": {
+        "kind": "failure",
+        "category": "validation",
+        "tag": "SchemaError",
+        "detail": {
+          "diagnostic_not_compared": "Expected number\n  at [\"user_id\"]"
+        }
+      },
+      "repo": {
+        "acquire": 0,
+        "release": 0
+      },
+      "events": [
+        "terminated:failure"
+      ]
+    },
+    {
+      "name": "domain_failure_after_acquire",
+      "outcome": {
+        "kind": "failure",
+        "category": "domain",
+        "tag": "UserNotFound",
+        "detail": {
+          "userId": 99
+        }
+      },
+      "repo": {
+        "acquire": 1,
+        "release": 1
+      },
+      "events": [
+        "request.valid",
+        "repo.acquire",
+        "users.build",
+        "greeter.build",
+        "auditor.build",
+        "repo.release:failure",
+        "terminated:failure"
+      ]
+    },
+    {
+      "name": "domain_recovery",
+      "outcome": {
+        "kind": "success",
+        "value": "hello guest"
+      },
+      "repo": {
+        "acquire": 1,
+        "release": 1
+      },
+      "events": [
+        "request.valid",
+        "repo.acquire",
+        "users.build",
+        "greeter.build",
+        "auditor.build",
+        "recovered:UserNotFound:99",
+        "repo.release:success",
+        "terminated:success"
+      ]
+    },
+    {
+      "name": "shared_layer",
+      "outcome": {
+        "kind": "success",
+        "value": {
+          "greeting": "hello bob",
+          "audit": "audited 2"
+        }
+      },
+      "repo": {
+        "acquire": 1,
+        "release": 1
+      },
+      "events": [
+        "request.valid",
+        "repo.acquire",
+        "users.build",
+        "greeter.build",
+        "auditor.build",
+        "notify:hello bob",
+        "repo.release:success",
+        "terminated:success"
+      ]
+    },
+    {
+      "name": "service_replacement",
+      "outcome": {
+        "kind": "success",
+        "value": "hello test-user"
+      },
+      "repo": {
+        "acquire": 0,
+        "release": 0
+      },
+      "events": [
+        "request.valid",
+        "greeter.build",
+        "auditor.build",
+        "test-users.get:1",
+        "notify:hello test-user",
+        "terminated:success"
+      ]
+    },
+    {
+      "name": "cancellation_after_acquire",
+      "outcome": {
+        "kind": "interrupted"
+      },
+      "repo": {
+        "acquire": 1,
+        "release": 1
+      },
+      "events": [
+        "request.valid",
+        "repo.acquire",
+        "users.build",
+        "greeter.build",
+        "auditor.build",
+        "notify.started:hello ann",
+        "cancel.requested",
+        "repo.release:interrupt",
+        "cancel.returned",
+        "terminated:interrupt"
+      ]
+    }
+  ]
+}

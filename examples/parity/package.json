@@ -1,0 +1,13 @@
+{
+  "name": "peffect-parity-reference",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "reference": "bun run reference.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "fixtures": "bun run fixtures/check.ts"
+  },
+  "devDependencies": {
+    "typescript": "6.0.3"
+  }
+}
