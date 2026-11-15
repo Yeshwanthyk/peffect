@@ -13,7 +13,7 @@ Seven nodes (Effect v4: internal/core.ts, internal/effect.ts):
     Suspend(thunk)    build the next effect lazily
     Async(register)   park until resume(effect) is called, once
     WithFiber(f)      look at / change the running fiber
-    YieldNow          let other asyncio work run
+    YieldNow          queue the next step on the fiber's dispatcher
 
 Frames (pushed on the stack; up to three hooks):
 
@@ -196,7 +196,7 @@ class YieldNow(Effect[None, Never, Never]):
     __slots__ = ()
 
     def _eval(self, fiber: AnyFiber) -> AnyEffect | None:
-        fiber._reschedule(UNIT)  # pyright: ignore[reportPrivateUsage]
+        fiber.yield_now(UNIT)
         return None
 
 
@@ -205,7 +205,8 @@ type Register[A, E, R] = Callable[[Resume[A, E, R]], Effect[Any, Any, Any] | Non
 
 
 class Park:
-    """One parked Async. ``done`` flips once: by resume, or by an interrupt that got there first."""
+    """One parked Async or queued step. ``done`` flips once: by resume or the queued step, or by
+    an interrupt that got there first."""
 
     __slots__ = ("done", "registering", "sync")
 
@@ -238,7 +239,7 @@ class Async(Effect[A_co, E_co, R_co]):
             if park.registering:
                 park.sync = eff  # resumed before register returned: no need to park
             else:
-                fiber._wake(eff)  # pyright: ignore[reportPrivateUsage]
+                fiber.evaluate(eff)  # runs the fiber now, before resume returns
 
         cancel = self.register(resume)
         park.registering = False

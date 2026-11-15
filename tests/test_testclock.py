@@ -7,9 +7,10 @@ Adaptations used throughout:
 - `TestClock` lives in `peffect.testing`, which doesn't exist yet. Each test looks it up when it
   runs (`load_testing()`), so until it exists every test fails instead of the file failing to
   import. The lookups are temporary: they become imports, with real types, once the modules land.
-- Durations are seconds as `float` (D5): `"1 minute"` is `60`, `"999 millis"` is `0.999`.
-  `set_time` takes milliseconds, as upstream's `setTime(timestamp: number)` does. Nanosecond
-  reads are `int` (upstream `bigint`).
+- Durations are upstream's own `Duration.Input` values: `"1 minute"`, `Duration.seconds(1)` is
+  `D.seconds(1)`. `adjust` takes an Input (TestClock.ts:359) and the instance `sleep` a Duration
+  (TestClock.ts:329). `set_time` takes milliseconds, as upstream's `setTime(timestamp: number)`
+  does. Nanosecond reads are `int` (upstream `bigint`).
 - `it.effect` is @effect/vitest's runner (vendor/effect-v4, sparse checkout; read with `git show
   HEAD:packages/vitest/src/internal/internal.ts`). Line 68: `TestEnv = Layer.mergeAll(
   TestConsole.layer, TestClock.layer())`; line 490: `effect: makeTester(flow(Effect.scoped,
@@ -31,6 +32,7 @@ import importlib
 from typing import Any, Never
 
 import peffect
+import peffect.duration as D
 from peffect import (
     Clock,
     Effect,
@@ -97,7 +99,7 @@ async def test_adjust_skips_the_cancelled_deadline_interrupted_sleep():
     @gen
     def program():
         test_clock = yield from make_test_clock()
-        sleeper = yield from fork(test_clock.sleep(60), start_immediately=True)
+        sleeper = yield from fork(test_clock.sleep(D.minutes(1)), start_immediately=True)
         yield from yield_now
         yield from sleeper.interrupt()
 
@@ -108,7 +110,7 @@ async def test_adjust_skips_the_cancelled_deadline_interrupted_sleep():
                 yield from yield_now
 
         yield from fork(observe())
-        yield from test_clock.adjust(120)
+        yield from test_clock.adjust("2 minutes")
 
     await it_effect(program())
     assert 60_000 not in observed
@@ -124,8 +126,8 @@ async def test_sleep_does_not_require_passage_of_wall_time():
 
     @gen
     def body():
-        yield from fork(sleep(10 * 3600).flat_map(lambda _: sync(lambda: elapsed.append(True))))
-        yield from t.adjust(11 * 3600)
+        yield from fork(sleep("10 hours").flat_map(lambda _: sync(lambda: elapsed.append(True))))
+        yield from t.adjust("11 hours")
 
     await it_effect(body())
     assert elapsed == [True]
@@ -139,11 +141,11 @@ async def test_sleep_delays_effects_until_time_is_adjusted():
     @gen
     def body():
         fiber = yield from fork(
-            sleep(10 * 3600).flat_map(lambda _: sync(lambda: elapsed.append(True)))
+            sleep("10 hours").flat_map(lambda _: sync(lambda: elapsed.append(True)))
         )
-        yield from t.adjust(9 * 3600)
+        yield from t.adjust("9 hours")
         assert fiber.exit is None
-        yield from t.adjust(11 * 3600)
+        yield from t.adjust("11 hours")
         assert is_void(fiber.exit)
 
     await it_effect(body())
@@ -160,7 +162,7 @@ async def test_sleep_preserves_interruption_masking_in_a_finalizer_on_first_use(
     @gen
     def cleanup():
         yield from sync(lambda: events.append("cleanup started"))
-        yield from sleep(1)
+        yield from sleep("1 second")
         yield from sync(lambda: events.append("cleanup finished"))
 
     @gen
@@ -173,7 +175,7 @@ async def test_sleep_preserves_interruption_masking_in_a_finalizer_on_first_use(
         yield from yield_now
         assert events == ["cleanup started"]
         assert fiber.exit is None
-        yield from clock.adjust(1)
+        yield from clock.adjust("1 second")
         yield from fiber.await_()
 
     await it_effect(program())
@@ -190,13 +192,13 @@ async def test_sleep_waits_the_full_duration_each_time_a_sleep_effect_runs():
     @gen
     def body():
         clock = yield from ambient_test_clock()
-        one_second = clock.sleep(1)
-        yield from t.adjust(5)
+        one_second = clock.sleep(D.seconds(1))
+        yield from t.adjust("5 seconds")
         for _ in range(2):
             fiber = yield from fork(one_second)
-            yield from t.adjust(0.999)
+            yield from t.adjust("999 millis")
             assert fiber.exit is None
-            yield from t.adjust(0.001)
+            yield from t.adjust("1 millis")
             assert is_void(fiber.exit)
 
     await it_effect(body())
@@ -212,9 +214,9 @@ async def test_set_time_sleep_correctly_handles_new_set_time():
 
     @gen
     def body():
-        yield from fork(sleep(10 * 3600).flat_map(lambda _: sync(lambda: elapsed.append(True))))
+        yield from fork(sleep("10 hours").flat_map(lambda _: sync(lambda: elapsed.append(True))))
         assert elapsed == []
-        yield from t.set_time(11 * 3600 * 1000)  # Duration.toMillis(Duration.hours(11))
+        yield from t.set_time(D.to_millis(D.hours(11)))
         assert elapsed == [True]
 
     await it_effect(body())
@@ -286,7 +288,7 @@ async def test_set_time_runs_sleeps_registered_after_a_fork_and_join():
     @gen
     def tick_forever():
         while True:
-            yield from sleep(1)
+            yield from sleep("1 second")
             yield from sync(lambda: ticks.append(1))
             yield from fork(yield_now).flat_map(lambda f: f.join())
 
@@ -315,7 +317,7 @@ async def test_adjust_advances_the_clock_when_detached():
     def body():
         clock = yield from ambient_test_clock()
         adjust = clock.adjust
-        yield from adjust(1)
+        yield from adjust("1 second")
         assert clock.current_time_millis_unsafe() == 1000
 
     await it_effect(body())
@@ -327,7 +329,7 @@ async def test_adjust_advances_wall_and_monotonic_time():
     @gen
     def program():
         test_clock = yield from make_test_clock()
-        yield from test_clock.adjust(1)
+        yield from test_clock.adjust("1 second")
         assert test_clock.current_time_millis_unsafe() == 1_000
         assert test_clock.monotonic_time_nanos_unsafe() == 1_000_000_000
         assert (yield from test_clock.monotonic_time_nanos) == 1_000_000_000
@@ -341,7 +343,7 @@ async def test_adjust_keeps_nanosecond_access_total_after_infinite_durations():
 
     @gen
     def program():
-        for duration in (float("inf"), float("-inf")):
+        for duration in (D.infinity, D.negative_infinity):
             test_clock = yield from make_test_clock()
             yield from test_clock.adjust(duration)
             nanos: Effect[int, Never, Never] = test_clock.current_time_nanos
@@ -360,12 +362,12 @@ async def test_adjust_advances_monotonic_time_to_intermediate_sleep_deadlines():
 
         @gen
         def sleeper():
-            yield from test_clock.sleep(1)
+            yield from test_clock.sleep(D.seconds(1))
             monotonic: Effect[int, Never, Never] = test_clock.monotonic_time_nanos
             observed.append((yield from monotonic))
 
         yield from fork(sleeper())
-        yield from test_clock.adjust(2)
+        yield from test_clock.adjust("2 seconds")
         assert test_clock.monotonic_time_nanos_unsafe() == 2_000_000_000
 
     await it_effect(program())
@@ -380,14 +382,14 @@ async def test_adjust_runs_sleeps_registered_after_a_yield():
     @gen
     def tick_forever():
         while True:
-            yield from sleep(1)
+            yield from sleep("1 second")
             yield from sync(lambda: ticks.append(1))
             yield from yield_now
 
     @gen
     def body():
         fiber = yield from fork(tick_forever())
-        yield from t.adjust(5)
+        yield from t.adjust("5 seconds")
         yield from fiber.interrupt()
 
     await it_effect(body())

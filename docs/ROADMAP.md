@@ -74,7 +74,7 @@ an AGENTS.md section with the idiom and the mistakes it prevents.
   `docs/UPSTREAM_TESTS.md` pass: `Context.empty`, Context equality (C9), `on_error`,
   `on_interrupt`, and `on_exit` keeping the body's failure with defect election (K9). Batch C
   (Clock) is ported; TestClock (D) and Scope (E) tests are drafted, red only on their missing API.
-- Tier 2b, Clock (2026-11-15): independently reviewed; seconds-only API remains incomplete. Leaf `clock.py` (`Clock` Reference,
+- Tier 2b, Clock (2026-11-15): independently reviewed; `sleep` takes `Duration.Input` (Duration lane). Leaf `clock.py` (`Clock` Reference,
   `ClockService` Protocol, `clock_with`, time reads, `sleep` moved out of `core.py`), batch C and
   the source-derived sleep tests green, `examples/clock.py` in `verify-peffect`, rows CL1–CL5,
   lesson 05. TestClock is the remaining half of this roadmap row.
@@ -131,6 +131,18 @@ an AGENTS.md section with the idiom and the mistakes it prevents.
   - Open parity gap: Context keys are classes, not strings.
   - Not formally modeled.
 
+- Scheduler (2026-11-15): implemented and independently reviewed; boundary and publication-documentation corrections accepted. A TestClock prerequisite.
+  - `scheduler.py`: `Scheduler`, `MaxOpsBeforeYield` and `PreventSchedulerYield` References,
+    `MixedScheduler` (priority buckets, FIFO within one, one `loop.call_soon` per batch),
+    `SchedulerDispatcher`; `with_dispatcher` and `DEFAULT_SCHEDULER` from the kernel.
+  - Kernel: resume, interrupt and root start evaluate the woken fiber synchronously, as upstream;
+    yields, automatic yields and scheduled forks go through the fiber's dispatcher.
+  - Scheduler.test.ts :42-:159 ported (runSyncExit and microtask fallback not), with source-derived
+    resume/dispatcher cases; rows SC1–SC7; nine targeted mutations go red.
+  - Formally modeled, bounded: synchronous wake and interrupt, nested drives, the queued yield
+    token (`verify-formal-kernel`, nesting ≤ 2). Not a proof at arbitrary depth; priorities,
+    batches and the op budget are tested only. Wake chains recurse (SC7, measured limit).
+
 ## Order and why
 
 - Context/Clock/Scope come before concurrency: `timeout` needs Clock (else it is untestable
@@ -159,8 +171,8 @@ an AGENTS.md section with the idiom and the mistakes it prevents.
 
 User requires a faithful port: documentation of a deviation is not acceptance of parity.
 Known gaps to reconcile before calling the port faithful (string-key service identity closed
-2026-11-15, INVARIANTS C10): incomplete Equal protocols, and seconds-only Clock inputs versus Duration
-normalization and precision. Preserve observable upstream behavior; Python syntax/platform
+2026-11-15, INVARIANTS C10): incomplete Equal protocols (Clock inputs now follow `Duration.Input` normalization and nanosecond
+precision). Preserve observable upstream behavior; Python syntax/platform
 adaptations must be distinguished from semantic omissions.
 
 TestClock tests are drafted, not accepted as a complete contract yet. Port Scope and scheduler

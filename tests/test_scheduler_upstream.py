@@ -7,11 +7,10 @@ The second section is source-derived and labelled: assertions read off internal/
 (currentDispatcher :567-570, setContext :801-803, forkUnsafe :5629-5633) and Scheduler.ts,
 with the expected values measured against the pinned source (scratch upstream_scheduler.ts).
 
-`peffect.scheduler` does not exist yet. It is reached through `api(name)`, so a missing module
-or member fails here as missing API. Its names are snake_case forms of Scheduler.ts:
-`Scheduler`, `MaxOpsBeforeYield` and `PreventSchedulerYield` References, `MixedScheduler(
-execution_mode, set_immediate)`, `execution_mode`, `should_yield(fiber)`, `make_dispatcher()`,
-`schedule_task(task, priority)`, `flush()`, and `fiber.current_op_count` (Fiber.ts:77).
+Names are snake_case forms of Scheduler.ts: `Scheduler`, `MaxOpsBeforeYield` and
+`PreventSchedulerYield` References, `MixedScheduler(execution_mode, set_immediate)`,
+`execution_mode`, `should_yield(fiber)`, `make_dispatcher()`, `schedule_task(task, priority)`,
+`flush()`, and `fiber.current_op_count` (Fiber.ts:77).
 
 Adaptations used throughout:
 - `Effect.provideService(Ref, v)` is `provide(Ref.context(v))`; `Effect.all` over effects is
@@ -21,7 +20,6 @@ Adaptations used throughout:
 """
 
 import asyncio
-import importlib
 from collections.abc import Callable, Coroutine
 from typing import Any, Literal, Never
 
@@ -43,13 +41,15 @@ from peffect import (
     sync,
     yield_now,
 )
+from peffect.scheduler import (
+    MaxOpsBeforeYield,
+    MixedScheduler,
+    PreventSchedulerYield,
+    Scheduler,
+    SchedulerDispatcher,
+)
 
 type Task = Callable[[], None]
-
-
-def api(name: str) -> Any:
-    """A member of the prospective peffect.scheduler module."""
-    return getattr(importlib.import_module("peffect.scheduler"), name)
 
 
 async def bounded[T](work: Coroutine[Any, Any, T]) -> T:
@@ -74,7 +74,7 @@ def manual_immediate(tasks: list[Task]) -> Callable[[Task], Task]:
 
 async def test_mixed_scheduler_orders_by_priority_sync():
     """Scheduler.test.ts:42 "MixedScheduler orders by priority (sync)"."""
-    dispatcher = api("MixedScheduler")("sync").make_dispatcher()
+    dispatcher = MixedScheduler("sync").make_dispatcher()
     order: list[str] = []
     for label, priority in [("p0-1", 0), ("p10-1", 10), ("p-1-1", -1), ("p10-2", 10), ("p0-2", 0)]:
         dispatcher.schedule_task(lambda label=label: order.append(label), priority)
@@ -85,7 +85,7 @@ async def test_mixed_scheduler_orders_by_priority_sync():
 
 async def test_mixed_scheduler_is_fifo_within_a_priority():
     """Scheduler.test.ts:66 "MixedScheduler is FIFO within a priority"."""
-    dispatcher = api("MixedScheduler")("sync").make_dispatcher()
+    dispatcher = MixedScheduler("sync").make_dispatcher()
     order: list[int] = []
     for n in [1, 2, 3]:
         dispatcher.schedule_task(lambda n=n: order.append(n), 5)
@@ -96,7 +96,7 @@ async def test_mixed_scheduler_is_fifo_within_a_priority():
 class CountingScheduler:
     """Scheduler.test.ts:81's scheduler: counts should_yield calls and never yields."""
 
-    execution_mode = "sync"
+    execution_mode: Literal["sync"] = "sync"
 
     def __init__(self) -> None:
         self.calls = 0
@@ -111,13 +111,12 @@ class CountingScheduler:
 
 async def test_prevent_scheduler_yield_disables_should_yield_checks():
     """Scheduler.test.ts:79 "PreventSchedulerYield disables shouldYield checks"."""
-    scheduler_ref, prevent = api("Scheduler"), api("PreventSchedulerYield")
     scheduler = CountingScheduler()
-    await run(provide(scheduler_ref.context(scheduler))(sync(lambda: None)))
+    await run(provide(Scheduler.context(scheduler))(sync(lambda: None)))
     assert scheduler.calls > 0
 
     scheduler.calls = 0
-    both = scheduler_ref.context(scheduler) | prevent.context(True)
+    both = Scheduler.context(scheduler) | PreventSchedulerYield.context(True)
     await run(provide(both)(sync(lambda: None)))
     assert scheduler.calls == 0
 
@@ -141,15 +140,15 @@ class ThrowingDispatcher:
 
 
 class ThrowingScheduler:
-    execution_mode = "async"
+    execution_mode: Literal["async"] = "async"
 
     def __init__(self) -> None:
         self.defect = Boom("dispatch failed")
         self.attempts = 0
         self.tasks: list[Task] = []
 
-    def should_yield(self, fiber: Any) -> bool:
-        return bool(fiber.current_op_count >= 2)
+    def should_yield(self, fiber: Fiber[Any, Any]) -> bool:
+        return fiber.current_op_count >= 2
 
     def make_dispatcher(self) -> ThrowingDispatcher:
         return ThrowingDispatcher(self)
@@ -159,7 +158,7 @@ async def test_automatic_dispatch_failures_terminate_the_fiber_with_a_defect():
     """Scheduler.test.ts:105 "automatic dispatch failures terminate the fiber with a defect"."""
     scheduler = ThrowingScheduler()
     program = for_each([1, 2, 3], lambda n, _: succeed(n), concurrency="unbounded")
-    provided = provide(api("Scheduler").context(scheduler))(program)
+    provided = provide(Scheduler.context(scheduler))(program)
     fiber: Fiber[list[int], Never] = await run(fork_daemon(provided, start_immediately=True))
     ex = fiber.exit
     assert isinstance(ex, Failure)
@@ -170,10 +169,10 @@ async def test_automatic_dispatch_failures_terminate_the_fiber_with_a_defect():
 async def test_concurrent_for_each_completes_with_max_ops_before_yield(budget: int):
     """Scheduler.test.ts:131 "concurrent forEach completes with MaxOpsBeforeYield ${budget}"."""
     tasks: list[Task] = []
-    scheduler = api("MixedScheduler")("async", manual_immediate(tasks))
+    scheduler = MixedScheduler("async", manual_immediate(tasks))
     program = for_each([1, 2, 3], lambda n, _: succeed(n), concurrency="unbounded")
-    budgeted = provide(api("MaxOpsBeforeYield").context(budget))(program)
-    provided = provide(api("Scheduler").context(scheduler))(budgeted)
+    budgeted = provide(MaxOpsBeforeYield.context(budget))(program)
+    provided = provide(Scheduler.context(scheduler))(budgeted)
     fiber: Fiber[list[int], Never] = await run(fork_daemon(provided, start_immediately=True))
     for _ in range(1000):  # bounded: a yielding livelock fails instead of hanging
         if not tasks:
@@ -199,7 +198,7 @@ async def test_inlined_map_steps_count_against_max_ops_before_yield():
         return effect
 
     both = for_each([chain("a"), chain("b")], lambda e, _: e, concurrency="unbounded")
-    await bounded(run(provide(api("MaxOpsBeforeYield").context(16))(both)))
+    await bounded(run(provide(MaxOpsBeforeYield.context(16))(both)))
     assert "".join(order) != "a" * 100 + "b" * 100
 
 
@@ -209,26 +208,26 @@ async def test_inlined_map_steps_count_against_max_ops_before_yield():
 class RecordingScheduler:
     """Delegates to a MixedScheduler; logs `name#n@priority` per task, n = dispatcher made."""
 
-    execution_mode = "async"
+    execution_mode: Literal["async"] = "async"
 
     def __init__(self, name: str, log: list[str]) -> None:
         self.name, self.log, self.made = name, log, 0
-        self.inner: Any = api("MixedScheduler")()
+        self.inner = MixedScheduler()
 
-    def should_yield(self, fiber: Any) -> bool:
-        return bool(self.inner.should_yield(fiber))
+    def should_yield(self, fiber: Fiber[Any, Any]) -> bool:
+        return self.inner.should_yield(fiber)
 
     def make_dispatcher(self) -> "RecordingDispatcher":
         self.made += 1
         return RecordingDispatcher(f"{self.name}#{self.made}", self.inner.make_dispatcher(), self)
 
     def provide[A, E, R](self, eff: Effect[A, E, R]) -> Effect[A, E, R]:
-        provided: Effect[A, E, R] = provide(api("Scheduler").context(self))(eff)
+        provided: Effect[A, E, R] = provide(Scheduler.context(self))(eff)
         return provided
 
 
 class RecordingDispatcher:
-    def __init__(self, label: str, inner: Any, owner: RecordingScheduler) -> None:
+    def __init__(self, label: str, inner: SchedulerDispatcher, owner: RecordingScheduler) -> None:
         self.label, self.inner, self.owner = label, inner, owner
 
     def schedule_task(self, task: Task, priority: int) -> None:
@@ -301,7 +300,7 @@ async def test_flush_runs_queued_tasks_once_and_cancels_the_pending_immediate():
     """Source-derived (Scheduler.ts MixedSchedulerDispatcher.flush): flush cancels the armed
     setImmediate, then drains; the next schedule arms a new one. Measured upstream: [1]."""
     tasks: list[Task] = []
-    dispatcher = api("MixedScheduler")("async", manual_immediate(tasks)).make_dispatcher()
+    dispatcher = MixedScheduler("async", manual_immediate(tasks)).make_dispatcher()
     order: list[int] = []
     dispatcher.schedule_task(lambda: order.append(1), 0)
     dispatcher.flush()

@@ -4,14 +4,16 @@ Upstream is pinned at vendor/effect-v4 commit 289a53f (Effect v4.1.4). No upstre
 TestClock pins these (batch D ports those), so each case cites the source lines it checks in
 packages/effect/src/internal/effect.ts:
 
-    6476  sleep(d) = clockWith(clock => clock.sleep(d))     the fiber's Clock does the sleeping
+    6476  sleep(d) = clockWith(clock => clock.sleep(fromInputUnsafe(d)))   the fiber's Clock sleeps
     6419  sleepMillis(millis <= 0) = yieldNow                no timer, but still a yield
     6420  sleepMillis(!isFinite(millis)) = never             no timer, parked until interrupted
     6421  callback(setTimeout(...); return clearTimeout)     a timer; interrupting clears it
 
 Adaptations:
-- `sleep` takes seconds as a float (D5). Upstream's `MAX_TIMER_MILLIS` chunking has no Python
-  counterpart: asyncio's `call_later` has no 2**31 ms limit.
+- `sleep` takes a `Duration.Input`, a bare number being milliseconds, as upstream; the Duration
+  contract itself is in tests/test_clock_duration_upstream.py. asyncio's `call_later` takes
+  seconds, and upstream's `MAX_TIMER_MILLIS` chunking has no Python counterpart: asyncio has no
+  2**31 ms limit.
 - The timer is observed by spying on the running loop's `call_later`. The harness itself
   registers no timer: it advances the loop only with `asyncio.sleep(0)`, which CPython runs
   without `call_later`. So every recorded timer is one `sleep` registered.
@@ -40,6 +42,7 @@ from peffect import (
     succeed,
     sync,
 )
+from peffect.duration import Duration, seconds, zero
 
 
 class TimerSpy:
@@ -72,8 +75,8 @@ def is_interrupted(ex: Exit[Any, Any] | None) -> bool:
     return isinstance(ex, Failure) and ex.cause.is_interrupted_only
 
 
-@pytest.mark.parametrize("seconds", [0, -1])
-async def test_a_non_positive_sleep_is_a_yield_without_a_timer(timers: TimerSpy, seconds: float):
+@pytest.mark.parametrize("millis", [0, -1])
+async def test_a_non_positive_sleep_is_a_yield_without_a_timer(timers: TimerSpy, millis: float):
     """effect.ts:6419 `if (millis <= 0) return yieldNow`.
 
     The yield is observed as order: a forked fiber is queued before the sleep, so it runs between
@@ -85,7 +88,7 @@ async def test_a_non_positive_sleep_is_a_yield_without_a_timer(timers: TimerSpy,
     def program():
         child = yield from fork(sync(lambda: log.append("child")))
         yield from sync(lambda: log.append("before"))
-        yield from sleep(seconds)
+        yield from sleep(millis)
         yield from sync(lambda: log.append("after"))
         yield from child.join()
 
@@ -109,11 +112,11 @@ async def test_an_infinite_sleep_parks_without_a_timer_until_interrupted(timers:
 
 async def test_interrupting_a_finite_sleep_clears_its_timer(timers: TimerSpy):
     """effect.ts:6421-6427: `setTimeout(...)`, and the returned `clearTimeout` runs on interrupt."""
-    fiber: Fiber[None, Never] = await run(fork_daemon(sleep(5)))
+    fiber: Fiber[None, Never] = await run(fork_daemon(sleep(seconds(5))))
     await ticks()
 
     assert fiber.exit is None
-    assert [delay for delay, _ in timers.timers] == [5]
+    assert [delay for delay, _ in timers.timers] == [5]  # call_later seconds
     (_, handle) = timers.timers[0]
     assert not handle.cancelled()  # registered and live before the interrupt
 
@@ -127,7 +130,7 @@ class RecordingClock:
     `sleep` that records its argument and completes at once instead of setting a timer."""
 
     def __init__(self) -> None:
-        self.slept: list[float] = []
+        self.slept: list[Duration] = []
 
     def current_time_millis_unsafe(self) -> int:
         return 0
@@ -150,19 +153,19 @@ class RecordingClock:
     def monotonic_time_nanos(self) -> Effect[int, Never, Never]:
         return succeed(0)
 
-    def sleep(self, seconds: float) -> Effect[None, Never, Never]:
-        return sync(lambda: self.slept.append(seconds))
+    def sleep(self, duration: Duration) -> Effect[None, Never, Never]:
+        return sync(lambda: self.slept.append(duration))
 
 
 async def test_sleep_uses_the_provided_clock(timers: TimerSpy):
-    """effect.ts:6476 `sleep = clockWith((clock) => clock.sleep(duration))`: the Clock in the
+    """effect.ts:6476 `sleep = clockWith((clock) => clock.sleep(...))`: the Clock in the
     fiber's context does the sleeping, so a provided one replaces the live timer."""
     recording = RecordingClock()
 
-    ex = await run_exit(provide(Clock.context(recording))(sleep(5)))
+    ex = await run_exit(provide(Clock.context(recording))(sleep(seconds(5))))
 
     assert isinstance(ex, Success)
-    assert recording.slept == [5]
+    assert recording.slept == [seconds(5)]
     assert timers.timers == []
 
 
@@ -170,4 +173,4 @@ async def test_nan_is_normalized_before_dispatch_to_a_provided_clock():
     """effect.ts:6477 + Duration.ts:465: normalization precedes the service call."""
     recording = RecordingClock()
     await run(provide(Clock.context(recording))(sleep(float("nan"))))
-    assert recording.slept == [0.0]
+    assert recording.slept == [zero]

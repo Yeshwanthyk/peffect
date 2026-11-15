@@ -19,8 +19,8 @@ Status values:
 | D1 | A service key is a string (`Context.Service("ContextTest/A")`) | Closed: `class A(Tag[int], key="ContextTest/A")`; the key string is the identity | Order assertions compare `A.key` |
 | D2 | `Scope` strategy `"sequential"` (default) or `"parallel"` | Both | Parallel cases are batch G; its Scope.test.ts ports pass |
 | D3 | `Context.makeUnsafe(map)` keeps the caller's map | The map is copied on install | That case is not ported |
-| D4 | Interrupt-at-install forced by a custom `Scheduler.shouldYield` | No scheduler hook: the interrupt is requested inside the `update_context` merge, at the same point | Same scenario and assertion (`observed is original`) |
-| D5 | Duration strings (`"1 minute"`) | Seconds as `float`, as `sleep` takes today | Only cases that need the unported Duration API are deferred (see below) |
+| D4 | Interrupt-at-install forced by a custom `Scheduler.shouldYield` | Written before the scheduler was ported: the interrupt is requested inside the `update_context` merge, at the same point. A `should_yield` hook now exists; the adaptation is unchanged | Same scenario and assertion (`observed is original`) |
+| D5 | Duration strings (`"1 minute"`) | Ported as is: `sleep`, `TestClock.adjust` take a `Duration.Input` (`peffect.duration`); a bare number is milliseconds | None |
 | D6 | `fiber.pollUnsafe()` | `fiber.exit`, read in tests | none |
 | D7 | `Effect.forever`, `Effect.delay` | `@gen` `while True`, `sleep(...).flat_map(...)` | No new API |
 
@@ -77,19 +77,21 @@ Old expectations changed to upstream's, each because election now applies:
 
 `time.time_ns` and `time.monotonic_ns` are monkeypatched in place of `Date.now` and `process.hrtime.bigint`.
 
-Source-derived sleep contracts, `tests/test_clock_sleep.py`: no upstream test outside TestClock
-pins these, so each case cites `internal/effect.ts` (CL1-CL4 in INVARIANTS). All green.
+Source-derived sleep contracts, `tests/test_clock_sleep.py` and
+`tests/test_clock_duration_upstream.py` (the `Duration.Input` contract): no upstream test outside
+TestClock pins these, so each case cites its source line (CL1-CL4 in INVARIANTS). All green.
 
 | Source | Python test |
 |---|---|
 | :6476 `sleep = clockWith(c => c.sleep(d))` | `test_sleep_uses_the_provided_clock` |
+| :6477 `fromInputUnsafe` inside the callback | `test_a_provided_clock_receives_the_normalized_duration`, `test_invalid_input_is_a_defect_when_run_and_the_clock_is_not_called` |
 | :6419 `millis <= 0` yields | `test_a_non_positive_sleep_is_a_yield_without_a_timer[0, -1]` |
 | :6420 non-finite is `never` | `test_an_infinite_sleep_parks_without_a_timer_until_interrupted` |
 | :6421-6427 `setTimeout` / `clearTimeout` | `test_interrupting_a_finite_sleep_clears_its_timer` |
 
-NaN: `sleep(nan)` yields, like 0. Decided from `Duration.make` (Duration.ts:465), which turns NaN
-into zero before `sleepMillis` sees it; `sleepMillis` alone would send NaN to `never`
-(`!isFinite`). No test pins it. `-inf` yields: `toMillis` gives `-Infinity`, which is `<= 0`.
+NaN: `sleep(nan)` yields, like 0: `Duration.make` (Duration.ts:465) turns NaN into zero before
+`sleepMillis` sees it. `-Infinity` yields: `toMillis` gives `-Infinity`, which is `<= 0`. Both are
+pinned in `test_clock_duration_upstream.py`.
 
 ## Batches D–G
 
@@ -110,7 +112,8 @@ Deferred elsewhere in these upstream files:
 - TestClock warning tests: they need TestConsole.
 - The timeout variant of the cancelled-deadline test: tier 3.
 - Layer tests: see the Layer section below.
-- `MaxOpsBeforeYield`: no scheduler hook.
+- `MaxOpsBeforeYield`: the scheduler is now ported (Scheduler section below). These Clock-era
+  adaptations still use their original stand-ins; they are unchanged here.
 - The `updateServiceScoped` reset option: no such option yet.
 
 ### Equality adaptation and independent review
@@ -131,6 +134,11 @@ Clock, matching Duration.make's position before the service boundary. The record
 failed before this correction and passes after it. Sol's other Clock probes passed. Parent reran
 78 tests excluding the still-unimplemented TestClock draft, plus ruff and pyright successfully.
 This does not establish full Duration input parity.
+
+Clock Duration migration: `sleep` takes `Duration.Input` (bare numbers are milliseconds, as
+upstream), `ClockService.sleep` receives a `Duration`, and the live clock converts to seconds only
+at `call_later`. Every seconds caller was migrated preserving its physical interval; the TestClock
+draft now uses upstream's literal inputs (`"1 minute"`, `Duration.seconds(1)`).
 
 
 ## Resource unit — `tests/test_resources_upstream.py`
@@ -260,3 +268,42 @@ every build attempt parked behind the gate. Upstream's `fromBuildMemo` observes 
 `fromBuild` forked and closes it on failure (Layer.ts:360-372), so once both early requesters
 fail the entry is dropped and the later requester rebuilds. Upstream's value is
 `Effect.succeed`, so that rebuild does not park. Now only the first attempt parks.
+
+## Scheduler — `tests/test_scheduler_upstream.py`, `tests/test_fiber_resume_upstream.py`
+
+`Scheduler.test.ts` ports:
+- :42 priority order (sync), :66 FIFO within a priority.
+- :79 `PreventSchedulerYield` disables `should_yield` checks.
+- :105 a throwing dispatch kills the fiber with that defect, with no retry.
+- :131 concurrent `for_each` completes under `MaxOpsBeforeYield` 1, 2 and 3.
+- :159 inlined `map` steps count against the budget.
+
+Not ported: the three `runSyncExit` tests (peffect has no synchronous runner) and the microtask
+fallback (Cloudflare's `setImmediate`).
+
+Source-derived, each with the value measured against the pinned source under Node 22. Case
+labels are the test-name labels; the invariants they pin are INVARIANTS SC1–SC7.
+
+| case | reads | measured upstream |
+|---|---|---|
+| S2 dispatcher made on first dispatch, then kept | effect.ts:567-570 | `[0, 1, ["s#1@0" ×3]]` |
+| S3 provide switches the dispatcher; leaving drops it | effect.ts:801-803 | `["out#1@0", "in#1@0", "out#2@0"]` |
+| S4/S5 scheduled children start on the parent's dispatcher (fork, fork_daemon) | effect.ts:5629-5633 | `[["s#1@0"], ["s#1@0", "s#1@0"], 1, 1]` |
+| flush cancels the armed immediate, then drains | Scheduler.ts dispatcher `flush` | `[1]` |
+| S1 resume runs the parked fiber before `resume` returns | effect.ts:1220-1226 | `["A continues", "resume returned"]` |
+| S10 interrupting a parked fiber publishes before returning | effect.ts:605-611 | `[true]` |
+| S10 interrupt then resume of one park: interrupt only | effect.ts:605-611, :1213-1219 | `[0, true]` |
+| L1 P3 interrupting a yielded fiber exits now, drops its queued step | effect.ts:773-781 | `[true, 0]` |
+| L1 P8 the dropped step cannot resume a finalizer parked after the interrupt | effect.ts:773-781 | `[false, 0, true]` |
+| S1 Deferred waiters resumed with an interrupt die inside `done_unsafe` | Deferred.ts:881-895 | `[true ×4]` |
+| A7 the root runs its synchronous prefix when `run` starts | effect.ts:5777 | `"effect prefix"` first |
+
+Adaptation: A7 pins only that the prefix runs before callbacks already queued on the loop;
+whether the awaiting caller resumes before them is asyncio's choice.
+
+The red commit's `api(name)` lookups were migrated to typed imports from `peffect.scheduler`. No
+assertion changed. The scheduler's ordering is documented in INVARIANTS `## Scheduler`; its formal
+check is `.claude/skills/verify-formal-kernel` (bounded, nesting ≤ 2, not a proof at arbitrary
+depth).
+
+Status: implemented and independently reviewed; boundary correction and scheduled-start regression accepted.

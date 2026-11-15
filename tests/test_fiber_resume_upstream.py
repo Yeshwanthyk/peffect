@@ -32,6 +32,7 @@ from peffect import (
     fork,
     gen,
     never,
+    on_exit,
     run,
     run_exit,
     succeed,
@@ -152,6 +153,30 @@ async def test_l1_interrupting_a_yielded_fiber_exits_now_and_drops_its_queued_st
     assert out == [True, 0, True]
 
 
+async def test_l1_the_dropped_step_cannot_resume_a_finalizer_parked_after_the_interrupt():
+    """Source-derived L1 (P8): the interrupt claims the yielded fiber, whose finalizer then parks;
+    the queued yieldNow task finds `resumed` set and returns, so only the finalizer's own resume
+    continues the fiber (internal/effect.ts:773-781). Measured upstream: [false, 0, true]."""
+    runs: list[int] = []
+    out: list[object] = []
+    releases: list[Resume] = []
+
+    @gen
+    def program():
+        body = yield_now.flat_map(lambda _: sync(lambda: runs.append(1)))
+        f: Fiber[None, Never] = yield from fork(
+            body.ensuring(parked(releases, succeed(None))), start_immediately=True
+        )
+        yield from sync(f.interrupt_unsafe)
+        yield from yield_now
+        out.append(f.exit is not None)
+        yield from sync(lambda: releases[0](succeed(None)))
+        out.extend([len(runs), has_interrupts((yield from f.await_()))])
+
+    await run(program())
+    assert out == [False, 0, True]
+
+
 async def test_s1_deferred_waiters_resumed_with_an_interrupt_die_inside_done_unsafe():
     """Source-derived S1 through Deferred: doneUnsafe clears `resumes` first because "a waiter
     resumed with an interrupt cause dies synchronously inside `resume`" (Deferred.ts:881-895).
@@ -196,3 +221,27 @@ async def test_a7_root_fiber_runs_its_synchronous_prefix_when_run_starts():
     await run_exit(sync(lambda: order.append("effect prefix")))
     await queued
     assert order[0] == "effect prefix"
+
+
+async def test_interrupt_before_scheduled_start_never_enters_body_or_finalizer():
+    """Source-derived: interruptUnsafe claims a queued start (effect.ts:590-611,
+    :5633-5636). Retains before-first-instruction coverage after roots became immediate.
+    One explicit yield drains the earlier queued start; no wall-clock timing is assumed.
+    """
+    events: list[str] = []
+
+    @gen
+    def program():
+        body = on_exit(lambda _: sync(lambda: events.append("finalizer")))(
+            sync(lambda: events.append("body"))
+        )
+        child: Fiber[None, Never] = yield from fork(body)
+        child.interrupt_unsafe()
+        original = child.exit
+        assert has_interrupts(original)
+        assert events == []
+        yield from yield_now
+        assert child.exit is original
+        assert events == []
+
+    await run(program())

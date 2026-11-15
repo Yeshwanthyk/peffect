@@ -16,8 +16,9 @@ One owner: the `Fiber`. Nothing else writes these fields except through the meth
 | may be interrupted now | `Fiber.interruptible` | `_start` (before startup), `uninterruptible*`, `interruptible`, `SetInterruptible.on_any`, `_mask_while_popping` |
 | interrupt requested | `Fiber.interrupted` (Cause or None) | `Fiber.interrupt_unsafe` only |
 | interrupt not yet delivered | `Fiber._deferred` | `interrupt_unsafe` (set), `Fiber.take_interrupt` (clear; every delivery site calls it) |
-| parked on an Async | `Fiber._parked` + `Park.done` | `Async._eval` (park), `resume` / `_interrupt_parked` (flip done) |
-| run loop active | `Fiber.running` | `_drive` only |
+| parked on an Async or a queued step | `Fiber._parked` + `Park.done` | `Async._eval` / `yield_now` (park), `resume` / the queued `step` / `_interrupt_now` (flip done) |
+| run loop active | `Fiber.running` | `evaluate` only (set on entry, restored to its previous value on exit) |
+| dispatcher | `Fiber._dispatcher`, `_scheduler` | `current_dispatcher` (made on first use), `_read_scheduler` (dropped when the scheduler changes) |
 | result | `Fiber._exit` | `Fiber._publish` only |
 | live children | `Fiber.children` | `_start` (add), child `_publish` (discard) |
 | body's exit while children finish | `Fiber._ending` | `Fiber._done` only |
@@ -29,11 +30,12 @@ Derived: `Fiber.exit` (property), `Cause.is_interrupted` etc. Nothing is cached.
 
 | transition | trigger | precondition | write | code |
 |---|---|---|---|---|
-| start | `fork` / `fork_daemon` / `run_exit` | — | default or inherited mask installed before startup; child in `parent.children` (not for a daemon); one `_drive` scheduled, or with `start_immediately=True` run now, nested in the caller's drive, until it parks or ends (v4 forkUnsafe, internal/effect.ts:5614-5637) | `fiber._start` |
-| step | run loop | `running` | eval one node; maybe push/pop frames | `Fiber._drive` |
+| start | `fork` / `fork_daemon` / `run_exit` | — | default or inherited mask installed before startup; child in `parent.children` (not for a daemon); its start queued at priority 0 on the forking fiber's dispatcher, or with `start_immediately=True` evaluated now, nested in the caller's drive, until it parks or ends (v4 forkUnsafe, internal/effect.ts:5614-5637); a root (`run_exit`) and a concurrent `for_each` worker are evaluated now (:5777) | `fiber._start` |
+| step | run loop | `running` | eval one node; maybe push/pop frames | `Fiber.evaluate` |
+| yield | `YieldNow`, or the op budget (`MaxOpsBeforeYield`, unless `PreventSchedulerYield`) | — | queue `step` on `current_dispatcher`, then `_parked = park`; the step claims the park and evaluates, or returns if an interrupt claimed it first (internal/effect.ts:773-781) | `Fiber.yield_now` |
 | park | `Async._eval` | `register` didn't resume synchronously | `_parked = park`; push `_AsyncCancel` if cancel | `Async._eval` |
-| resume | callback from asyncio / another fiber | `not park.done` | `park.done = True`; schedule `_drive(eff)` | `Async._eval.resume` |
-| interrupt | `interrupt_unsafe(by)` | not finished | add to `interrupted`; parked+interruptible → wake with Failure, else `_deferred` | `Fiber.interrupt_unsafe` |
+| resume | callback from asyncio / another fiber | `not park.done` | `park.done = True`; `evaluate(eff)` now, before `resume` returns (internal/effect.ts:1220-1226) | `Async._eval.resume` |
+| interrupt | `interrupt_unsafe(by)` | not finished | add to `interrupted`; running or masked → `_deferred`; otherwise (parked, queued, or not started) mark the parked `Park` done and evaluate the Failure now (internal/effect.ts:590-611) | `Fiber.interrupt_unsafe`, `_interrupt_now` |
 | deliver | loop top / `SetInterruptible` pop / `interruptible()` / unwind / parked wake | interrupt pending and interruptible | `take_interrupt()` clears `_deferred`; the node becomes (or the unwinding cause gains) `interrupted` | `Fiber.take_interrupt` |
 | unwind | `Failure._eval` while interrupted+interruptible | — | pop handlers until a frame masks (OnExit, AsyncCancel); `exit_`'s `ExitFrame` is popped like any handler, so it never turns its own fiber's interrupt into a value (v4 exitFailCause, internal/core.ts:611-624) | `Failure._eval` |
 | finish | stack empty | — | remember the exit in `_ending`; interrupt live children; park on `_await_all` *inside the run loop* (so an interrupt during the wait is delivered and merged into the exit); publish once no child is live | `Fiber._done`, `_await_all`, `_publish` |
@@ -44,14 +46,14 @@ Derived: `Fiber.exit` (property), `Cause.is_interrupted` etc. Nothing is cached.
 |---|---|---|
 | K1 | **Exit once.** A fiber publishes exactly one Exit; every observer is called exactly once (late observers immediately). | `_publish` (single call site: `_done`), `add_observer` |
 | K2 | **Resume once.** An Async continues its fiber at most once, whether resume or interrupt wins. | `Park.done` |
-| K3 | **One runner.** At most one `_drive` is scheduled or running per fiber. | every scheduling site goes through park/resume or yield |
+| K3 | **One runner.** Per fiber, at most one `evaluate` is running (nested or not) or live in a dispatcher queue. A queued step or start that lost its claim stays queued but returns at once. | every entry is a claim of `Park.done` or the `_exit` check; `running` defers an interrupt |
 | K4 | **Finalizers run.** Every `OnExit` frame that was pushed runs its finalizer exactly once before the fiber publishes. | `OnExit.on_any` masks as it pops, stopping the unwind |
 | K5 | **Interrupts aren't caught.** A user error handler never runs with an interrupt in flight while the fiber is interruptible. | `Failure._eval` skip loop |
 | K6 | **Masks hold.** No interrupt is delivered while `interruptible` is False. | every delivery site checks `interruptible` |
-| K7 | **Interrupts land.** A requested interrupt is delivered at the next interruptible point; if the fiber reaches one before finishing, its cause contains `Interrupt`. A worker that stays masked through completion need not deliver it. | `_deferred`, `SetInterruptible`, `_drive` tail |
+| K7 | **Interrupts land.** A requested interrupt is delivered at the next interruptible point; if the fiber reaches one before finishing, its cause contains `Interrupt`. A worker that stays masked through completion need not deliver it. | `_deferred`, `SetInterruptible`, `evaluate` tail |
 | K8 | **No orphans.** A fiber publishes only after every child it forked has published. | `_done` |
 | K9 | **Causes don't lose reasons**, except: the typed `Fail`s of a skipped handler's region are dropped on interrupt (v4 `core.ts:601-629`). Stronger than v4 in two places: a defect unwinding out of a mask, and a body's exit when an interrupt lands while waiting on children, keep their reasons (v4 replaces them with the interrupt). A failing or raising finalizer adds its cause to the body's, then defects are elected as v4 does (`combineFinalizerCause`, `causeElectDefects`, internal/effect.ts:4069-4075, 184-191): with a `Die` present, each `Fail` becomes a `Die` holding the same value, so a `Die`'s defect is any value. | `Cause.__add__`, `Cause.elect_defects`, `OnExit._finalizer`, `OnExit.on_err`, `Failure._eval`, `Fiber._done` |
-| K10 | **Stack safety.** Composition depth never becomes Python recursion depth. | nodes return the next node |
+| K10 | **Stack safety.** One fiber's composition depth never becomes Python recursion depth. Wakes across fibers do: see SC7. | nodes return the next node |
 
 ## Proof strategy
 
@@ -61,10 +63,10 @@ Derived: `Fiber.exit` (property), `Cause.is_interrupted` etc. Nothing is cached.
 | K4, K5, K9 over arbitrary programs | Hypothesis: random effect trees, interrupted at random scheduler ticks, on the real kernel; oracle = an independent recursive reference interpreter for the no-interrupt case, and trace rules for the interrupt case | `tests/test_kernel_props.py` |
 | K10 | 100k `flat_map` example | `tests/test_kernel.py` |
 
-Atomicity assumption the model relies on: asyncio runs one callback at a time and `_drive` never
-awaits, so one `_drive` call is atomic with respect to other fibers and callbacks. The one exception
-is code a node calls synchronously inside the drive (an Async `register`, a `Sync` thunk), which can
-call `interrupt_unsafe` on the running fiber: the model includes that as "interrupt while running".
+Atomicity assumption the model relies on: asyncio runs one callback at a time and `evaluate` never
+awaits. Code a node calls synchronously (an Async `register`, a `Sync` thunk, an observer) can
+resume, interrupt or `flush` for any fiber, including the running one; the model lets those wakers
+act nested inside any drive, so a drive is atomic only between them.
 
 ## Findings log
 
@@ -85,6 +87,48 @@ call `interrupt_unsafe` on the running fiber: the model includes that as "interr
 | skip loop stops adding `interrupted` | K7: `Failure(Fail('a'))` with no `Interrupt` (pinned `@example`) |
 | old `_done` (wait outside the run loop) | K7: `Success(0)` after an interrupt |
 | `OnExit.on_err` skips `elect_defects` | K9: `test_kernel_matches_reference`, a `fail` left beside a finalizer's `die` |
+
+## Scheduler
+
+Pinned `Scheduler.ts:33-271` and `internal/effect.ts:567-570, :590-611, :615-781, :794-828,
+:1220-1226, :5629-5637, :5777`. Tests: `tests/test_scheduler_upstream.py` (Scheduler.test.ts
+ports plus source-derived cases) and `tests/test_fiber_resume_upstream.py`. Test names keep their
+design labels (S1-S10, L1, A7); the rows below are numbered SC so they do not clash with Scope.
+
+| # | Invariant | Enforced by | Pinned by |
+|---|---|---|---|
+| SC1 | **Wakes are synchronous.** A resume, an interrupt of a fiber that is not running and interruptible, and a root start evaluate the fiber before returning. | `Async._eval.resume`, `interrupt_unsafe`, `_start`, `run_exit` | `test_s1_*`, `test_s10_*`, `test_a7_*`; `async_wake` mutation |
+| SC2 | **One dispatcher per fiber per scheduler**, made on first dispatch and dropped when a provide changes the scheduler, entering or leaving. | `current_dispatcher`, `_read_scheduler` | `test_s2_*`, `test_s3_*`; `no_dispatcher_cache`, `no_dispatcher_reset` mutations |
+| SC3 | **Scheduled children start on the forker's dispatcher** at priority 0; immediate ones evaluate inline. | `_start(spawner=...)` | `test_s4_s5_*`; `child_own_dispatcher` mutation |
+| SC4 | **A queued step is one-shot.** An interrupt that claims a yielded fiber's park runs now; the step then returns, even if a finalizer has parked the fiber again. | `yield_now`'s `step` checks `park.done` | `test_l1_*` (P3, P8); `queued_step_ignores_claim` mutation; `Break_no_token_claim` |
+| SC5 | **The budget cannot livelock.** The slice resuming an automatic yield runs its first op unchecked (`currentOpCount` starts at 1), so `MaxOpsBeforeYield` 1 still progresses; `PreventSchedulerYield` never asks `should_yield`. | `evaluate`'s `resuming`, `_read_scheduler` | budget 1-3 ports, prevent port; `no_resuming`, `ignore_prevent` mutations |
+| SC6 | **A throwing dispatch is a defect, not a retry.** | `evaluate`'s `yielding` flag | throwing-dispatch port; `retry_dispatch` mutation |
+| SC7 | **Wake chains recurse (platform limitation, not a promised threshold).** Each synchronous wake nests one `evaluate`, as upstream; there is no trampoline. Measured 2026-11-15 on Python 3.13.1 (uv), default recursion limit 1000 (scratch `python_chain_impl.py`: fiber i awaits a Deferred, then completes the next): chains of 160 complete; at 170 or more, 164 complete, one fiber dies with `RecursionError` and the rest stay pending. Upstream has no guard either: the same chain aborted Node 22 at 647 nested resumes, and Bun threw `RangeError` at 3948 with the rest hung. | none (upstream behavior) | measured only |
+
+Exact source behavior reviewed for this unit:
+- **`_running` reset and publication.** Upstream `runLoop` saves `prevRunning`, sets `_running`,
+  and restores it in `finally` (internal/effect.ts:676-677, :731-733); `evaluate` then sets
+  `_exit` and calls observers (:637-659), so upstream publishes with `_running` already restored.
+  peffect restores `running` the same way, but publishes from `_done` inside the loop, with
+  `running` still set. White-box observers can see this difference; B3 excludes `running` from
+  ordinary callers. Exited-fiber reentry remains harmless: `_publish` sets `_exit` before any observer runs, and every
+  entry to a fiber (`evaluate`, `interrupt_unsafe`) returns at the `_exit` check first. The formal
+  model ends the publishing drive (`Replace`) on that argument.
+- **Deferred delivery after a park.** Upstream handles an interrupt that arrived during register
+  inside `runLoop` (`yielded()` then `continue`, :714-719, `_running` still set); peffect restores
+  `running` and then calls `_interrupt_now`, a fresh `evaluate` at the same nesting level. No
+  other code runs in between.
+- **Batch exceptions.** `_after_scheduled` clears `_running` and `_run_tasks` drains every bucket
+  before running any task (Scheduler.ts:241-262); a task that raises ends the batch, and the rest
+  of the drained tasks are dropped, as upstream. Fiber steps never raise (`evaluate` turns
+  exceptions into defects), so only a user task scheduled directly can. Platform difference: the
+  exception reaches asyncio's loop exception handler, where Node would report an uncaught
+  exception.
+- **Sync mode.** asyncio has no microtask queue, so `MixedScheduler("sync")` also arms with
+  `loop.call_soon`; `execution_mode` is only reported.
+
+Not modeled formally: priorities, batch boundaries, the op budget and `should_yield` (the model
+treats an automatic yield as a plain yield step); those are pinned by tests and mutations.
 
 ## Context
 
@@ -141,8 +185,8 @@ does not import it. Upstream: `internal/effect.ts:6395-6486`.
 
 | # | Invariant | Enforced by | Pinned by |
 |---|---|---|---|
-| CL1 | **Sleep goes through the fiber's Clock.** `sleep(s)` is `clock_with(lambda c: c.sleep(s))`; a provided Clock replaces the live timer for everything inside its `provide`. | `clock.sleep`, `clock_with` | `test_sleep_uses_the_provided_clock`, `examples/clock.py` |
-| CL2 | **Non-positive or NaN is a yield, with no timer.** NaN follows `Duration.make` (Duration.ts:465: NaN becomes zero) and then `sleepMillis` (`<= 0` yields, effect.ts:6419). | `_LiveClock.sleep` | `test_a_non_positive_sleep_is_a_yield_without_a_timer[0, -1]` |
+| CL1 | **Sleep goes through the fiber's Clock.** `sleep(d)` is `clock_with(lambda c: c.sleep(from_input_unsafe(d)))`; a provided Clock receives the normalized `Duration` and replaces the live timer for everything inside its `provide`. The conversion runs inside the callback, so invalid input is a defect when the effect runs and the Clock is not called (effect.ts:6476-6477). | `clock.sleep`, `clock_with` | `test_sleep_uses_the_provided_clock`, `test_a_provided_clock_receives_the_normalized_duration`, `test_invalid_input_is_a_defect_when_run_and_the_clock_is_not_called`, `examples/clock.py` |
+| CL2 | **Non-positive or NaN is a yield, with no timer.** The live clock sleeps `sleepMillis(toMillis(d))`; NaN became zero in `Duration` (Duration.ts:465) and `-Infinity` is `<= 0` (effect.ts:6419). A positive sleep sets one `call_later(millis / 1000)`, the only seconds conversion. | `_LiveClock.sleep` | `test_a_non_positive_sleep_is_a_yield_without_a_timer[0, -1]` |
 | CL3 | **Infinite parks with no timer** until interrupted (effect.ts:6420). | `_LiveClock.sleep` returns `never` | `test_an_infinite_sleep_parks_without_a_timer_until_interrupted` |
 | CL4 | **Interrupting a finite sleep cancels its timer** (`clearTimeout`, effect.ts:6421-6427). | `async_` cancel effect runs `handle.cancel` | `test_interrupting_a_finite_sleep_clears_its_timer` |
 | CL5 | **Wall nanos stay within 1s of wall time.** Monotonic plus a module-level origin, re-anchored when the skew is strictly greater than 1e9 ns; wall time is whole milliseconds like `Date.now()`. Integer arithmetic only. | `_wall_nanos` | `test_keeps_wall_time_aligned_while_exposing_the_monotonic_source` |
@@ -225,7 +269,7 @@ and the existing interrupt/observer protocol, not bulk ordering or multiple-targ
 ## Traversal
 
 Pinned `internal/effect.ts:5030-5112, :5157-5320` (forEach, forEachSequential,
-resolveConcurrency, iterateConcurrentImpl). Implemented, awaiting independent review.
+resolveConcurrency, iterateConcurrentImpl). Implemented and independently reviewed, including ordered worker cleanup and cancellation-cause corrections.
 
 **Where it lives.** Two placements were weighed. (a) A non-kernel module over a newly public
 `fork_unsafe`: not enough, since the state machine also needs `add_observer`, `interrupt_unsafe`
@@ -299,7 +343,7 @@ white-box and exempt.
 |---|---|---|
 | B1 | **Imports are public.** Outside the kernel, a `peffect` name is imported from `peffect`, or from the kernel module that defines it (as re-exported in `__init__.py`: `from peffect.core import Effect`, relative `from .core import Effect`), or is `peffect.core.WithFiber`. Module-qualified kernel imports (`import peffect.core`, `from peffect import core`) and star imports from a kernel module are rejected; import the names. | `scripts/check_boundaries.py` |
 | B2 | **No reach through the module.** `peffect.X` (any alias of the module) names something in `peffect.__all__`. | same |
-| B3 | **Fibers stay opaque.** On a Fiber, code outside the kernel uses only `context`, `await_`, `join`, `interrupt`: the data a service lookup needs, and the three effects the kernel's own tests and the example use to wait on or stop a fiber. Run-loop state (`stack`, `running`, `interrupted`, `interruptible`, `children`, `exit`) and unsafe primitives (`interrupt_unsafe`, `take_interrupt`, `add_observer`, `swap_context`) stay inside. `context` is a read-only property over a read-only map: assigning or deleting it is a pyright error and an `AttributeError`, writing an item a `TypeError` (`typetests/should_fail.py` 12–14, `test_fiber_context_is_read_only_and_owned`), so the lint checks reads only. This list is a specification: a new public Fiber member is a deliberate edit to `FIBER_PUBLIC`. | same |
+| B3 | **Fibers stay opaque.** On a Fiber, code outside the kernel uses only `context`, `current_op_count`, `await_`, `join`, `interrupt`: the data a service lookup needs, the operation count custom schedulers read in `should_yield` (upstream Fiber.ts:77), and the three effects the kernel's own tests and the example use to wait on or stop a fiber. Run-loop state (`stack`, `running`, `interrupted`, `interruptible`, `children`, `exit`) and unsafe primitives (`interrupt_unsafe`, `take_interrupt`, `add_observer`, `swap_context`) stay inside. `context` is a read-only property over a read-only map: assigning or deleting it is a pyright error and an `AttributeError`, writing an item a `TypeError` (`typetests/should_fail.py` 12–14, `test_fiber_context_is_read_only_and_owned`), so the lint checks reads only. This list is a specification: a new public Fiber member is a deliberate edit to `FIBER_PUBLIC`. | same |
 
 **What B3 can see.** A value counts as a Fiber when it is the first parameter of a lambda or a
 named `def` passed to `WithFiber` (or an alias of it, directly or as `f=`), or a parameter

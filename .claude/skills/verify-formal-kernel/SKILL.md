@@ -14,12 +14,15 @@ interrupter. The model is `FiberKernel.tla`. The same promises are tested on the
 
 | model part | code it describes |
 |---|---|
-| `Drive`, `LoopTop`, `Ready`, `DriveTail` | `Fiber._drive` (entry, loop-top delivery, tail delivery to a parked fiber) |
-| `IntUnsafe` | `Fiber.interrupt_unsafe`, `_interrupt_parked`, `take_interrupt`, `_wake` |
-| `Park`, `ExtResume`, `Wake` | `core.Async._eval` (register, `_park`), its `resume` with the `Park.done` guard |
+| `cur`, `stk`, `Push`, `EndDrive`, `Replace` | nested `Fiber.evaluate` calls: whoever wakes a fiber runs it before returning; `running` is `cur` or in `stk` |
+| `LoopTop`, `Ready`, `DriveTail` | `Fiber.evaluate` (loop-top delivery; the tail's fresh `_interrupt_now` for a fiber that parked with an interrupt waiting) |
+| `Drive` | a dispatcher task: `_start`'s queued `child.evaluate` (no-op once exited) or `yield_now`'s `step` (no-op once its `Park` is done); run by the batch or a nested `flush` |
+| `Yield` | `Fiber.yield_now` (schedule the step, then `_parked`), from `YieldNow` or the op budget |
+| `IntUnsafe`, `Claim` | `Fiber.interrupt_unsafe`, `_interrupt_now`, `take_interrupt` |
+| `Park`, `ExtResume` | `core.Async._eval` (register, `_park`), its `resume` with the `Park.done` guard calling `fiber.evaluate` |
 | `Eval` "mask" / "unmask" / "enable" | `uninterruptible`; `SetInterruptible.on_any` delivering through `take_interrupt` |
 | `Done`, `AwaitPark` | `Fiber._done` (`_ending`, interrupt children), `_await_all`, `_publish`, `add_observer` |
-| `Eval` "fork", `under`, `EndDrive` | `fiber._start` via `fork` (`fork_daemon` shares it; a parentless child isn't modeled); default or inherited interruptibility is installed before either startup path; `start_immediately=True` runs `child._drive` nested in the parent's drive (`under` holds the suspended parent until the child's slice ends) |
+| `Eval` "fork", `Init` | `fiber._start` via `fork` (`fork_daemon` shares it; a parentless child isn't modeled); default or inherited interruptibility is installed before either startup path; `start_immediately=True` pushes the child's `evaluate` over the parent's, otherwise the start is queued on the parent's dispatcher. `Init` starts P running: `run_exit` evaluates the root at once |
 
 **Not modeled: context.** The model has no context state. `update_context`, `RestoreContext`,
 `Fiber.swap_context` and the context a fork passes on are proven by `tests/test_context.py`
@@ -29,7 +32,20 @@ Why the model's pass still means something with them added (an argument, not a c
 nor holds back an interrupt, and the model's "the interrupt unwinds to the top" still describes
 the code.
 
-**Sync:** 2026-11-15, fiber bulk/inherited-mask unit: fork copies either the caller's
+**Sync:** 2026-11-15, scheduler unit: resume, interrupt of a fiber that is not running, and
+root start are synchronous nested `evaluate` calls (internal/effect.ts:590-611, :1220-1226,
+:5777); `yield_now` parks on a queued step that an interrupt can claim first (:773-781);
+scheduled starts go on the forker's dispatcher (:5629-5633). Wakers (`ExtResume`, `Interrupt`,
+`Drive`) may act from the loop or nested inside any drive. 2232 states, depth 21, every
+configured rule holds. Every `Break_*.cfg` is red, including the new `no_token_claim`. The
+isolated scratch `_done` break (`if not live:` forced true, applied in memory by a pytest plugin
+outside the repo) makes three linked tests fail through `run.sh`; `fiber.py`'s hash was unchanged.
+Modeling correction made during this update: the first run let a nested `flush` re-enter C
+while C's interrupt was being evaluated before its queued start ran. The code can't take that
+step: that `Failure` meets an empty stack and goes straight to `_done`/`_publish` with no user
+code in between, so `IntUnsafe` now publishes an unstarted fiber atomically.
+
+Previous Sync, 2026-11-15, fiber bulk/inherited-mask unit: fork copies either the caller's
 interruptibility or the default `True` before scheduled or immediate startup, matching
 `internal/effect.ts:5614-5637`. The model explores both caller masks and both options; 988
 states, depth 22, every configured rule holds. Every `Break_*.cfg` remains red. An isolated
@@ -46,24 +62,27 @@ needs another look before its pass means anything.
 |---|---|---|
 | `K1_ExitOnce` | a fiber publishes once | joiners see two different results |
 | `K2_ResumeOnce` | a Park continues its fiber at most once | the fiber runs a continuation twice |
-| `K3_OneRunner` | at most one `_drive` per fiber is queued or running | two run loops share one stack |
+| `K3_OneRunner` | per fiber, at most one `evaluate` is running (nested or not) or live in a dispatcher queue | two run loops share one stack |
 | `K6_MasksHold` | no interrupt is delivered inside a mask | half-done acquire/release |
 | `K7_InterruptsLand` | an interrupt requested before exit lands once execution regains interruptibility | `interrupt()` silently ignored |
 | `K8_NoOrphans` | a parent publishes only after its forked child has | leaked work running past its scope |
 | deadlock, `AllPublish` | every started fiber publishes; nothing gets stuck | a joiner waits forever |
 
-**Reach:** every interleaving of this instance: P starts masked or interruptible, forks C
-with default or inherited interruptibility, explicitly enables interruption, parks, and ends.
-C parks, explicitly enables interruption, masks, parks inside the mask, and unmasks. One
-external interrupt of P can arrive at any loop turn; async completions can arrive at any turn
-(late ones included), and one register can interrupt its own fiber. Startup may be scheduled
-or immediate, nested. 988 states, depth 22. Both fibers regain interruptibility before normal
+**Reach:** every interleaving of this instance: P starts at once, masked or interruptible,
+forks C with default or inherited interruptibility, yields, explicitly enables interruption,
+parks, and ends. C yields, parks, explicitly enables interruption, masks, parks inside the mask,
+and unmasks. One interrupt of P, async completions (late ones included) and dispatcher tasks can
+each arrive from the loop or nested inside any running drive; one register can interrupt its own
+fiber. Startup may be scheduled or immediate. 2232 states, depth 21. Nesting is at most two
+drives deep (two fibers, each at most once on the stack, which K3 checks): this is a bounded
+check of one instance, not a proof for arbitrary nesting depth, and it says nothing about
+Python's recursion limit (see INVARIANTS SC7). Both fibers regain interruptibility before normal
 completion: K7 does not claim that a permanently masked worker must publish an interrupt.
 
 **Cancellation cause correction:** `_AsyncCancel.on_err` combines the original interrupt
 with cleanup failure and elects defects (upstream `asyncFinalizer`, :1268-1271). This changes
 unmodeled cause semantics, not masking or the protocol transitions. Runtime regressions cover
-it; the protocol rerun still explores 988 states, depth 22, with 24 linked tests passing.
+it; the protocol rerun then explored 988 states, depth 22, with 24 linked tests passing.
 
 **Bulk limits:** public `await_all` / `interrupt_all` reuse the modeled Async/observer protocol,
 but ordered iteration, multiple targets, signal-before-wait and cancellation subscription
@@ -72,7 +91,15 @@ The separate supervision `_await_all` remains unchanged. Parentless daemon super
 still outside this two-fiber model.
 
 **Assumptions:**
-- One asyncio loop. `_drive` never awaits.
+- One asyncio loop. `evaluate` never awaits.
+- Dispatcher tasks of different fibers, and loop callbacks, may run in any order; one fiber's
+  tasks run in FIFO order. Priorities, batch boundaries and the op budget's count (`resuming`,
+  `MaxOpsBeforeYield`, `PreventSchedulerYield`, `should_yield`) are not modeled: an automatic
+  yield is the same `Yield` step. They are pinned by `tests/test_scheduler_upstream.py` and the
+  scheduler mutations.
+- Python publishes from inside the loop with `running` still set; upstream clears `_running`
+  first (effect.ts:731-733 then :637-659). The model ends C's drive as it publishes (`Replace`),
+  which is sound because every entry to an exited fiber returns at its `_exit` check.
 - Callbacks may run in any order. This is more general than asyncio's FIFO, so the check may report traces asyncio can't produce. It can't miss a real one.
 - Finalizer and handler bodies (`OnExit`, catch) are abstracted into "the interrupt unwinds to the top". K4, K5 and K9 are left to the property tests.
 - One child and one interrupt. Three fibers, or repeated interrupts, are not covered.
@@ -94,7 +121,9 @@ the model has no statechart.
 
 Each counterexample step names a model action, and the Scope table maps that action to code.
 Replay it on the code as a test: start fibers with `peffect.fiber._start`, step the loop with
-`await asyncio.sleep(0)`, and call `interrupt_unsafe` at the step the trace does.
+`await asyncio.sleep(0)` (or `flush` a fiber's `current_dispatcher` for a nested `Drive`), and
+call `interrupt_unsafe` or a captured resume at the step the trace does, from a `sync` node when
+the trace shows it nested.
 - **Product defect:** the replay fails the same way on the code.
 - **Modeling error:** the code can't take one of the trace's steps. Check the "any order" assumption first. Fix the model, and say what was wrong with it.
 
@@ -102,10 +131,11 @@ Replay it on the code as a test: start fibers with `peffect.fiber._start`, step 
 
 | config | code change it mirrors | goes red on |
 |---|---|---|
-| `Break_old_done.cfg` | `_done` waits for children through observers outside the run loop (the pre-fix code) | K7 |
-| `Break_no_mask_check.cfg` | `interrupt_unsafe` wakes a parked fiber without checking `interruptible` | K6 |
-| `Break_no_park_done.cfg` | `Async` resume ignores `park.done` | K1, K2, K3, K7 |
-| `Break_no_loop_top.cfg` | `_drive` drops the loop-top `_deferred` check | K7 |
+| `Break_old_done.cfg` | `_done` waits for children through observers outside the run loop (the pre-fix code) | K1, K7, deadlock, AllPublish |
+| `Break_no_mask_check.cfg` | `interrupt_unsafe` runs a fiber that is not running without checking `interruptible` | K6 |
+| `Break_no_park_done.cfg` | `Async` resume ignores `park.done` | K3, K7, deadlock, AllPublish |
+| `Break_no_token_claim.cfg` | `yield_now`'s queued step ignores `park.done` (runs unless exited) | K1, K3, deadlock, AllPublish |
+| `Break_no_loop_top.cfg` | `evaluate` drops the loop-top `_deferred` check | K7 |
 | `Break_no_wait.cfg` | `_done` publishes without waiting for live children | K8 |
 | `Break_no_notify.cfg` | `_await_all`'s observer never resumes the parent | deadlock, AllPublish |
 

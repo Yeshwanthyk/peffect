@@ -1,7 +1,7 @@
 """Kernel types pyright must infer. Checked by tests/test_types.py."""
 
 from collections.abc import Mapping
-from typing import Any, Never, assert_type
+from typing import Any, Literal, Never, assert_type
 
 from peffect import (
     Cause,
@@ -48,6 +48,16 @@ from peffect import (
     sync,
 )
 from peffect import scope as current_scope  # Effect.scope
+from peffect.duration import Duration, seconds
+from peffect.scheduler import (
+    MaxOpsBeforeYield,
+    MixedScheduler,
+    PreventSchedulerYield,
+    Scheduler,
+    SchedulerDispatcher,
+    SchedulerService,
+    with_dispatcher,
+)
 
 
 class NotFound(Exception): ...
@@ -185,7 +195,9 @@ assert_type(Clock().use(), Effect[ClockService, Never, Never])
 assert_type(clock_with(lambda _: find(1)), Effect[str, NotFound, Never])
 assert_type(clock_with(lambda _: needs_two()), Effect[Pair, Never, Users | Log])
 assert_type(current_time_millis, Effect[int, Never, Never])
-assert_type(sleep(0.5), Effect[None, Never, Never])
+assert_type(sleep(500), Effect[None, Never, Never])  # a bare number is milliseconds
+assert_type(sleep("1 second"), Effect[None, Never, Never])
+assert_type(sleep(seconds(1)), Effect[None, Never, Never])
 
 
 class FixedClock:
@@ -210,7 +222,7 @@ class FixedClock:
     def monotonic_time_nanos(self) -> Effect[int, Never, Never]:
         return succeed(0)
 
-    def sleep(self, seconds: float) -> Effect[None, Never, Never]:
+    def sleep(self, duration: Duration) -> Effect[None, Never, Never]:
         return succeed(None)
 
 
@@ -385,3 +397,29 @@ def tolerates_db(layer: Layer[Users, NotFound, Db]) -> Layer[Users, NotFound, Db
 def layer_variance(users_and_db: Layer[Users | Db], users: Layer[Users]) -> None:
     assert_type(needs_users(users_and_db), Layer[Users])
     assert_type(tolerates_db(users), Layer[Users, NotFound, Db])
+
+
+# Scheduler: References add nothing to R; any class with the members is a SchedulerService;
+# with_dispatcher keeps f's A, E and R and hands it the fiber's dispatcher.
+assert_type(Scheduler().use(), Effect[SchedulerService, Never, Never])
+assert_type(MaxOpsBeforeYield().use(), Effect[int, Never, Never])
+assert_type(PreventSchedulerYield().use(), Effect[bool, Never, Never])
+
+
+class EagerScheduler:
+    execution_mode: Literal["sync"] = "sync"
+
+    def should_yield(self, fiber: Fiber[Any, Any]) -> bool:
+        return fiber.current_op_count > 64
+
+    def make_dispatcher(self) -> SchedulerDispatcher:
+        return MixedScheduler("sync").make_dispatcher()
+
+
+eager: SchedulerService = EagerScheduler()
+budget = Scheduler.context(eager) | MaxOpsBeforeYield.context(64)
+assert_type(provide(budget)(find(1)), Effect[str, NotFound, Never])
+assert_type(
+    with_dispatcher(lambda d: sync(d.flush).flat_map(lambda _: find(1))),
+    Effect[str, NotFound, Never],
+)

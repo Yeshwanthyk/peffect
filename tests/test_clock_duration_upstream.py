@@ -178,10 +178,11 @@ async def test_a_positive_sleep_sets_one_timer_for_its_milliseconds(
 
 
 async def test_a_one_nanosecond_sleep_is_a_timer_not_a_yield(timers: TimerSpy):
-    # toMillis(nanos(1n)) is 1e-6 > 0, so sleepMillis sets a timer
+    # toMillis(nanos(1n)) is the JS number 1e-6 > 0, so sleepMillis sets a timer. The seconds
+    # step divides that by 1000, which lands one ulp below the literal 1e-9 (9.999999999999999e-10)
     fiber: Fiber[None, Never] = await run(fork_daemon(sleep(D.nanos(1))))
     await ticks(1)
-    assert timers.delays == [D.to_millis(D.nanos(1)) / 1000]
+    assert timers.delays == [1e-6 / 1000]
     await run(fiber.interrupt())
 
 

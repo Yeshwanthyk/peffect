@@ -34,6 +34,10 @@ def read_context(fiber: Fiber[Any, Any]) -> Effect[Any, Any, Any]:
     return succeed(fiber.context)
 
 
+def scheduler_should_yield(fiber: Fiber[Any, Any]) -> bool:
+    return fiber.current_op_count >= 2048
+
+
 def stop(fiber: "F2[Any, Any]"):
     return fiber.interrupt()
 

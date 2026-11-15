@@ -4,7 +4,7 @@ Upstream implementation: internal/effect.ts acquireRelease :4240-4256, addFinali
 acquireUseRelease :4502-4515.
 
 Adaptations used throughout:
-- `Effect.delay(eff, ms)` is `sleep(ms / 1000)` and then `eff`: real time, as upstream's
+- `Effect.delay(eff, ms)` is `sleep(ms)` and then `eff`: real time, as upstream's
   `it.live` (:1389, :2578) and ordinary `it` (:322, :377). Durations are unchanged.
 - `Effect.runFork(eff)` + `fiber.interruptUnsafe()` + `Fiber.await` is
   `fork(eff, start_immediately=True)` inside `run`, then `sync(fiber.interrupt_unsafe)`
@@ -63,6 +63,7 @@ from peffect import (
     sync,
     uninterruptible,
 )
+from peffect.duration import Input
 
 type AnyEffect = Effect[Any, Any, Any]
 type Release = Callable[[Any, Exit[Any, Any]], AnyEffect]
@@ -89,8 +90,8 @@ def assert_exit_defect(ex: Exit[Any, Any] | None, defect: BaseException) -> None
     assert ex.cause.defects[0] is defect
 
 
-def delayed[A](seconds: float, thunk: Callable[[], A]) -> Effect[A, Never, Never]:
-    return sleep(seconds).flat_map(lambda _: sync(thunk))
+def delayed[A](duration: Input, thunk: Callable[[], A]) -> Effect[A, Never, Never]:
+    return sleep(duration).flat_map(lambda _: sync(thunk))
 
 
 # == acquireRelease (Effect.test.ts:1388) =======================================================
@@ -103,7 +104,7 @@ async def test_acquire_release_releases_on_interrupt():
     @gen
     def program():
         resource = acquire_release(
-            delayed(0.1, lambda: "foo"),
+            delayed(100, lambda: "foo"),
             lambda _a, _ex: sync(lambda: flags.__setitem__("release", True)),
         )
         fiber: Fiber[Any, Any] = yield from fork(scoped(resource), start_immediately=True)
@@ -152,7 +153,7 @@ def _flags_resource(flags: dict[str, bool]) -> tuple[AnyEffect, Release]:
 
         return sync(mark)
 
-    return delayed(0.1, acquired), release
+    return delayed(100, acquired), release
 
 
 async def _fork_interrupt_await(eff: AnyEffect, *, unsafe: bool = False) -> Exit[Any, Any]:
@@ -221,7 +222,7 @@ async def test_acquire_use_release_use_inherits_interrupt_status():
     flags = {"ref": False}
     eff = acquire_use_release(
         succeed(123),
-        lambda _: delayed(0.01, lambda: flags.__setitem__("ref", True)),
+        lambda _: delayed(10, lambda: flags.__setitem__("ref", True)),
         lambda _a, _ex: VOID,
     )
     await _fork_interrupt_await(uninterruptible(eff))

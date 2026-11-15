@@ -17,20 +17,21 @@ th,td{border:1px solid var(--border);padding:4px 6px;text-align:left;vertical-al
 td.r{color:var(--destructive)} td.g{color:var(--success)}
 </style></head><body><div class="wrap">
 <h3>Lesson 5: time is a service, so a test can own it</h3>
-<div class="txt"><code>Clock</code> is a <code>Reference</code>: every fiber has one without asking (the live clock is its default), and <code>provide(Clock.context(fake))</code> swaps it for everything inside. <code>sleep(s)</code> never touches asyncio itself. It asks the fiber's Clock to sleep, so a fake Clock makes an hour pass instantly.</div>
+<div class="txt"><code>Clock</code> is a <code>Reference</code>: every fiber has one without asking (the live clock is its default), and <code>provide(Clock.context(fake))</code> swaps it for everything inside. <code>sleep(d)</code> never touches asyncio itself. It turns <code>d</code> (a <code>Duration</code>, a string like <code>"1 hour"</code>, or a number of milliseconds) into a <code>Duration</code> and asks the fiber's Clock to sleep for it, so a fake Clock makes an hour pass instantly.</div>
 <div class="steps">
- <div class="box"><h4>1 · sleep(s)</h4><code>clock_with(lambda c: c.sleep(s))</code>: read the fiber's Clock (a Reference, so R stays <code>Never</code>), then delegate.</div>
- <div class="box k"><h4>2 · live clock decides</h4><code>s &le; 0</code> or NaN: a yield, no timer. <code>inf</code>: <code>never</code>, no timer. Otherwise: <code>async_</code> with one <code>call_later</code>.</div>
+ <div class="box"><h4>1 · sleep(d)</h4><code>clock_with(lambda c: c.sleep(from_input_unsafe(d)))</code>: read the fiber's Clock (a Reference, so R stays <code>Never</code>), convert, then delegate. The conversion runs inside the callback, so invalid input is a defect when the effect runs.</div>
+ <div class="box k"><h4>2 · live clock decides</h4><code>millis = to_millis(d)</code>. <code>millis &le; 0</code>: a yield, no timer. Infinite: <code>never</code>, no timer. Otherwise: <code>async_</code> with one <code>call_later(millis / 1000)</code>, the only seconds conversion.</div>
  <div class="box"><h4>3 · timer fires</h4><code>resume(succeed(None))</code>; the fiber continues on the loop.</div>
  <div class="box k"><h4>4 · or interrupted</h4>The <code>async_</code> cancel effect runs <code>handle.cancel()</code>: no stray timer is left on the loop.</div>
 </div>
 <table>
 <tr><th>call</th><th>live clock</th><th>upstream source</th></tr>
-<tr><td><code>sleep(0)</code>, <code>sleep(-1)</code>, <code>sleep(nan)</code></td><td>yield, no timer</td><td>effect.ts:6419; NaN via Duration.ts:465 (NaN becomes 0)</td></tr>
-<tr><td><code>sleep(inf)</code></td><td>parks until interrupted</td><td>effect.ts:6420</td></tr>
-<tr><td class="g"><code>sleep(5)</code></td><td><code>call_later(5)</code>; interrupt cancels it</td><td>effect.ts:6421-6427</td></tr>
+<tr><td><code>sleep(0)</code>, <code>sleep(-1)</code>, <code>sleep(nan)</code>, <code>sleep("-Infinity")</code></td><td>yield, no timer</td><td>effect.ts:6419; NaN via Duration.ts:465 (NaN becomes 0)</td></tr>
+<tr><td><code>sleep("Infinity")</code>, <code>sleep(math.inf)</code></td><td>parks until interrupted</td><td>effect.ts:6420</td></tr>
+<tr><td class="g"><code>sleep(1500)</code>, <code>sleep("1.5 seconds")</code></td><td><code>call_later(1.5)</code>; interrupt cancels it</td><td>effect.ts:6421-6427</td></tr>
+<tr><td><code>sleep("abc")</code></td><td>defect when run; the Clock is never called</td><td>effect.ts:6477 (fromInputUnsafe)</td></tr>
 <tr><td><code>current_time_nanos</code></td><td>monotonic + origin; re-anchored when skew &gt; 1s</td><td>effect.ts:6401-6415</td></tr>
 </table>
 <div class="txt"><b>Why a leaf module.</b> <code>sleep</code> used to live in the kernel. Routing it through a Clock needs <code>Reference</code>, which lives in <code>context.py</code>, which imports the kernel. So <code>sleep</code> moved to <code>clock.py</code> and the kernel imports nothing from it.<br>
-<b>How we know it holds.</b> <code>tests/test_clock_sleep.py</code> spies on the loop's <code>call_later</code> to see each timer registered and cancelled; <code>tests/test_clock.py</code> drives re-anchoring with patched clocks. Making <code>sleep</code> bypass the Clock turns the routing test red. Rows CL1–CL5 in <code>docs/INVARIANTS.md</code>.</div>
+<b>How we know it holds.</b> <code>tests/test_clock_sleep.py</code> spies on the loop's <code>call_later</code> to see each timer registered and cancelled; <code>tests/test_clock_duration_upstream.py</code> pins what Input each call accepts and the Duration a provided Clock receives; <code>tests/test_clock.py</code> drives re-anchoring with patched clocks. Making <code>sleep</code> bypass the Clock turns the routing test red. Rows CL1–CL5 in <code>docs/INVARIANTS.md</code>.</div>
 </div></body></html>

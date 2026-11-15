@@ -24,7 +24,7 @@ KERNEL_MODULES = frozenset({"peffect.core", "peffect.fiber", "peffect.cause"})
 ESCAPE_HATCH = ("peffect.core", "WithFiber")
 # The Fiber members code outside the kernel may touch (INVARIANTS.md B3). Everything else on a
 # Fiber is run-loop state or an unsafe primitive, even when its name has no underscore.
-FIBER_PUBLIC = frozenset({"context", "await_", "join", "interrupt"})
+FIBER_PUBLIC = frozenset({"context", "current_op_count", "await_", "join", "interrupt"})
 
 type Kind = Literal["peffect", "withfiber", "fibertype", "fiber", "def", "other"]
 type Scoped = ast.Module | ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda | ast.ClassDef

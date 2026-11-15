@@ -32,6 +32,7 @@ from peffect import (
     succeed,
     sync,
 )
+from peffect.scheduler import MaxOpsBeforeYield, MixedScheduler, SchedulerService, with_dispatcher
 
 
 class NotFound(Exception): ...
@@ -366,3 +367,21 @@ def layer_construction(repo: Repo, users: Layer[Users], mm: MemoMap, scope: Scop
     Layer.merge_all()
     # 70. MEMO_GET_WRONG_OUTPUT: get keeps the layer's ROut
     _got: Effect[Context[Log], Never, Never] | None = mm.get(users, scope)
+
+
+class NoDispatcher:
+    execution_mode = "async"
+
+    def should_yield(self, fiber: Fiber[Any, Any]) -> bool:
+        return False
+
+
+def scheduler_mistakes() -> None:
+    # 71. SCHEDULER_WITHOUT_DISPATCHER: a scheduler must make the dispatcher a fiber queues on
+    _s: SchedulerService = NoDispatcher()
+    # 72. SCHEDULER_MODE_UNKNOWN: execution_mode is "sync" or "async"
+    MixedScheduler("eager")
+    # 73. MAX_OPS_NOT_INT: the op budget is an int
+    MaxOpsBeforeYield.context("16")
+    # 74. WITH_DISPATCHER_NOT_EFFECT: f returns the effect to run
+    with_dispatcher(lambda d: d.flush())

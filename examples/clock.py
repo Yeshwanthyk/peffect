@@ -20,6 +20,7 @@ from peffect import (
     sleep,
     sync,
 )
+from peffect.duration import Duration, to_millis
 
 
 class FakeClock:
@@ -49,9 +50,9 @@ class FakeClock:
     def monotonic_time_nanos(self) -> Effect[int, Never, Never]:
         return sync(self.monotonic_time_nanos_unsafe)
 
-    def sleep(self, seconds: float) -> Effect[None, Never, Never]:
+    def sleep(self, duration: Duration) -> Effect[None, Never, Never]:
         def advance() -> None:
-            self.now_ms += round(seconds * 1000)
+            self.now_ms += round(to_millis(duration))
 
         return sync(advance)
 
@@ -59,7 +60,7 @@ class FakeClock:
 @gen
 def wait_an_hour():
     start = yield from current_time_millis
-    yield from sleep(3600)
+    yield from sleep("1 hour")
     end = yield from current_time_millis
     return end - start
 
@@ -72,10 +73,10 @@ def live():
     lines.append("live wall clock matches time.time()")
 
     before = yield from monotonic_time_nanos
-    yield from sleep(0.05)  # a real timer on the asyncio loop
+    yield from sleep(50)  # milliseconds: a real timer on the asyncio loop
     slept_ms = ((yield from monotonic_time_nanos) - before) // 1_000_000
     assert slept_ms >= 49, slept_ms
-    lines.append("sleep(0.05) waited at least 50ms")
+    lines.append("sleep(50) waited at least 50ms")
 
     parked = yield from fork(sleep(math.inf))  # never wakes: no timer at all
     yield from parked.interrupt()

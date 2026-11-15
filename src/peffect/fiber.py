@@ -1,8 +1,10 @@
 """Fiber: one running effect. Owns the stack, the interrupt state, and the children it forked.
 
-The run loop is `_drive`: evaluate a node, get the next node, repeat. It stops when a node returns
-None, which means one of three things: the fiber parked on an Async, it rescheduled itself
-(YieldNow or the 2048-op fairness budget), or it finished. Effect v4: internal/effect.ts:673-770.
+The run loop is `evaluate`: evaluate a node, get the next node, repeat. It stops when a node
+returns None, which means one of three things: the fiber parked on an Async, it queued its next
+step on its dispatcher (YieldNow or the op budget), or it finished. Resuming a park, interrupting a
+fiber that is not running, and starting a root all call `evaluate` at once, inside the caller.
+Effect v4: internal/effect.ts:567-803 (FiberImpl), Scheduler.ts (MixedScheduler).
 """
 
 from __future__ import annotations
@@ -10,8 +12,9 @@ from __future__ import annotations
 import asyncio
 import itertools
 import math
+import sys
 from collections.abc import Callable, Iterable, Iterator
-from typing import Any, Generic, Literal, Never, TypeVar, final
+from typing import Any, Final, Generic, Literal, Never, Protocol, TypeVar, final
 
 from peffect.cause import Cause, Interrupt
 from peffect.core import (
@@ -40,24 +43,138 @@ from peffect.core import (
 A_co = TypeVar("A_co", covariant=True)
 E_co = TypeVar("E_co", covariant=True)
 
-OPS_BEFORE_YIELD = 2048  # Effect v4 Scheduler.ts:198
 _ids = itertools.count(1)
 
 type Observer = Callable[[Exit[Any, Any]], None]
+type Task = Callable[[], None]
+
+# The References live in scheduler.py; the kernel reads their keys (Scheduler.ts:82, :294, :321).
+_SCHEDULER_KEY = "effect/Scheduler"
+_MAX_OPS_KEY = "effect/Scheduler/MaxOpsBeforeYield"
+_PREVENT_YIELD_KEY = "effect/Scheduler/PreventSchedulerYield"
+_MAX_OPS_DEFAULT = 2048
+
+
+# ================================================================================================
+# Scheduler (Effect v4 Scheduler.ts)
+# ================================================================================================
+
+
+class SchedulerDispatcher(Protocol):
+    """Runs queued tasks later, lowest priority first, FIFO within one (Scheduler.ts:60-63)."""
+
+    def schedule_task(self, task: Task, priority: int) -> None: ...
+    def flush(self) -> None: ...
+
+
+class SchedulerService(Protocol):
+    """What the Scheduler Reference provides (Scheduler.ts:33-48). ``should_yield`` is asked
+    once per op unless PreventSchedulerYield is set; each fiber makes one dispatcher, lazily."""
+
+    @property
+    def execution_mode(self) -> Literal["sync", "async"]: ...
+    def should_yield(self, fiber: Fiber[Any, Any]) -> bool: ...
+    def make_dispatcher(self) -> SchedulerDispatcher: ...
+
+
+def _call_soon(task: Task) -> Task:
+    return asyncio.get_running_loop().call_soon(task).cancel
+
+
+@final
+class MixedScheduler:
+    """The default scheduler: yield after MaxOpsBeforeYield ops, run each dispatcher's queue as
+    one batch on the next loop turn (Scheduler.ts:176-215). ``set_immediate(f)`` arms a batch and
+    returns its canceller. Platform adaptation: asyncio has no microtask queue, so "sync" mode
+    also arms with ``loop.call_soon``; the mode is only reported."""
+
+    __slots__ = ("execution_mode", "set_immediate")
+
+    def __init__(
+        self,
+        execution_mode: Literal["sync", "async"] = "async",
+        set_immediate: Callable[[Task], Task] | None = None,
+    ) -> None:
+        self.execution_mode: Literal["sync", "async"] = execution_mode
+        self.set_immediate = set_immediate or _call_soon
+
+    def should_yield(self, fiber: Fiber[Any, Any]) -> bool:
+        return fiber.current_op_count >= fiber.context.get(_MAX_OPS_KEY, _MAX_OPS_DEFAULT)
+
+    def make_dispatcher(self) -> SchedulerDispatcher:
+        return _MixedDispatcher(self.set_immediate)
+
+
+@final
+class _MixedDispatcher:
+    """MixedSchedulerDispatcher (Scheduler.ts:119-145, :217-271): priority buckets, one armed
+    batch at a time. A task scheduled while a batch runs waits for the next batch."""
+
+    __slots__ = ("_buckets", "_running", "_set_immediate")
+
+    def __init__(self, set_immediate: Callable[[Task], Task]) -> None:
+        self._buckets: list[tuple[int, list[Task]]] = []
+        self._running: Task | None = None
+        self._set_immediate = set_immediate
+
+    def schedule_task(self, task: Task, priority: int) -> None:
+        buckets = self._buckets
+        index = next((i for i, (p, _) in enumerate(buckets) if p > priority), len(buckets))
+        if index and buckets[index - 1][0] == priority:
+            buckets[index - 1][1].append(task)
+        else:
+            buckets.insert(index, (priority, [task]))
+        if self._running is None:
+            self._running = self._set_immediate(self._after_scheduled)
+
+    def _after_scheduled(self) -> None:
+        self._running = None
+        self._run_tasks()
+
+    def _run_tasks(self) -> None:
+        buckets, self._buckets = self._buckets, []
+        for _, tasks in buckets:
+            for task in tasks:
+                task()
+
+    def flush(self) -> None:
+        while self._buckets:
+            if self._running is not None:
+                self._running()
+                self._running = None
+            self._run_tasks()
+
+
+DEFAULT_SCHEDULER: Final[SchedulerService] = MixedScheduler()
+"""The Scheduler Reference's default (scheduler.py returns this one), shared by every fiber
+that has none provided, as upstream caches one default per Reference (Context.ts:1091-1096)."""
+
+
+def with_dispatcher[A, E, R](
+    f: Callable[[SchedulerDispatcher], Effect[A, E, R]],
+) -> Effect[A, E, R]:
+    """Run ``f`` with the executing fiber's dispatcher: the one its yields and scheduled forks
+    use (internal/effect.ts:567-570), so work queued on it is ordered with theirs."""
+    return WithFiber(lambda fiber: f(fiber.current_dispatcher))
 
 
 @final
 class Fiber(Generic[A_co, E_co]):
     __slots__ = (
+        "_ask_scheduler",
+        "_auto_yielded",
         "_context",
         "_deferred",
+        "_dispatcher",
         "_ending",
         "_exit",
-        "_loop",
         "_observers",
         "_parent",
         "_parked",
+        "_scheduler",
+        "_yield_at",
         "children",
+        "current_op_count",
         "id",
         "interrupted",
         "interruptible",
@@ -65,26 +182,25 @@ class Fiber(Generic[A_co, E_co]):
         "stack",
     )
 
-    def __init__(
-        self,
-        loop: asyncio.AbstractEventLoop,
-        context: ContextMap,
-        parent: Fiber[Any, Any] | None = None,
-    ) -> None:
+    def __init__(self, context: ContextMap, parent: Fiber[Any, Any] | None = None) -> None:
         self.id = next(_ids)
         self.stack: list[Frame] = []
-        self._context = context
         self.interruptible = True
         self.interrupted: Cause[Never] | None = None
         self.running = False
         self.children: set[Fiber[Any, Any]] = set()
-        self._loop = loop
+        self.current_op_count = 0  # ops in this slice, read by should_yield (Fiber.ts:77)
         self._parent = parent
         self._ending: Exit[Any, Any] | None = None  # body exit, kept while children finish
         self._deferred = False  # an interrupt arrived while running; deliver at the next step
-        self._parked: Park | None = None
+        self._parked: Park | None = None  # the Async or queued step a wake must claim first
         self._exit: Exit[Any, Any] | None = None
         self._observers: list[Observer] = []
+        self._auto_yielded = False  # this slice resumes a budget yield: run one op unchecked
+        self._dispatcher: SchedulerDispatcher | None = None
+        self._scheduler: SchedulerService | None = None
+        self._context = context
+        self._read_scheduler()
 
     def __repr__(self) -> str:
         return f"Fiber#{self.id}"
@@ -97,32 +213,77 @@ class Fiber(Generic[A_co, E_co]):
     def swap_context(self, context: ContextMap) -> ContextMap:
         """Kernel only (update_context, RestoreContext): install ``context``, return the old one."""
         old, self._context = self._context, context
+        self._read_scheduler()
         return old
+
+    def _read_scheduler(self) -> None:
+        """setContext's cache (internal/effect.ts:794-828): a new scheduler drops the dispatcher,
+        so the next dispatch makes one from it."""
+        ctx = self._context
+        scheduler: SchedulerService = ctx.get(_SCHEDULER_KEY, DEFAULT_SCHEDULER)
+        if scheduler is not self._scheduler:
+            self._dispatcher = None
+            self._scheduler = scheduler
+        # One compare per op: the loop asks only once current_op_count reaches _yield_at.
+        # PreventSchedulerYield never asks; MixedScheduler's answer is that compare itself.
+        self._ask_scheduler = False
+        if ctx.get(_PREVENT_YIELD_KEY, False):
+            self._yield_at = sys.maxsize
+        elif type(scheduler) is MixedScheduler:
+            self._yield_at: int = ctx.get(_MAX_OPS_KEY, _MAX_OPS_DEFAULT)
+        else:
+            self._yield_at, self._ask_scheduler = 0, True
+
+    @property
+    def current_dispatcher(self) -> SchedulerDispatcher:
+        """Made on first use and kept until the scheduler changes (internal/effect.ts:567-570)."""
+        if self._dispatcher is None:
+            assert self._scheduler is not None
+            self._dispatcher = self._scheduler.make_dispatcher()
+        return self._dispatcher
 
     # -- the run loop ------------------------------------------------------------------------------
 
-    def _drive(self, eff: AnyEffect) -> None:
+    def evaluate(self, eff: AnyEffect) -> None:
+        """Kernel only: run this fiber from ``eff`` until it parks, queues a step, or ends.
+        Called by the starter, a resume, a queued step, or an interrupt; a no-op once exited.
+        Effect v4: evaluate and runLoop, internal/effect.ts:615-728."""
+        if self._exit is not None:
+            return
         self._parked = None
-        self.running = True
+        was_running, self.running = self.running, True
+        resuming, self._auto_yielded = self._auto_yielded, False
+        yielding = False  # a budget yield was tried this slice; don't retry if dispatch failed
+        self.current_op_count = 1 if resuming else 0  # the resumption counts as the op it replaces
         cur: AnyEffect | None = eff
-        ops = 0
         try:
             while cur is not None:
                 if self._deferred and self.interruptible:
                     cur = Failure(self.take_interrupt())
-                ops += 1
-                if ops > OPS_BEFORE_YIELD:
-                    self._reschedule(cur)
-                    return
+                ops = self.current_op_count = self.current_op_count + 1
                 try:
+                    if (
+                        ops >= self._yield_at
+                        and not resuming
+                        and not yielding
+                        and (not self._ask_scheduler or self._should_yield())
+                    ):
+                        yielding = True
+                        self.yield_now(cur, automatic=True)
+                        break
+                    resuming = False
                     cur = cur._eval(self)  # pyright: ignore[reportPrivateUsage]
-                except Exception as e:  # a bug in user code or a combinator: a defect
+                except Exception as e:  # a bug in user code, a combinator, or a dispatcher
                     cur = Failure(Cause.die(e))
         finally:
-            self.running = False
+            self.running = was_running
         # Parked while an interrupt was waiting (it arrived during register): deliver it now.
         if self._deferred and self.interruptible and self._parked is not None:
-            self._interrupt_parked(self._parked)
+            self._interrupt_now()
+
+    def _should_yield(self) -> bool:
+        assert self._scheduler is not None
+        return self._scheduler.should_yield(self)
 
     def _pop(self, ok: bool) -> Frame | None:
         """Pop to the next frame that handles this outcome; on_any runs on every frame popped."""
@@ -136,29 +297,39 @@ class Fiber(Generic[A_co, E_co]):
                 return frame
         return None
 
-    def _reschedule(self, eff: AnyEffect) -> None:
-        self._loop.call_soon(self._drive, eff)
+    def yield_now(self, eff: AnyEffect, priority: int = 0, automatic: bool = False) -> None:
+        """Kernel only: queue ``eff`` as this fiber's next step on its dispatcher, then park on
+        the queued step. An interrupt that claims the park first runs at once and the step is
+        dropped (internal/effect.ts:773-781). A raising dispatcher parks nothing."""
+        park = Park()
+
+        def step() -> None:
+            if park.done:
+                return
+            park.done = True
+            self._auto_yielded = automatic
+            self.evaluate(eff)
+
+        self.current_dispatcher.schedule_task(step, priority)
+        self._parked = park
 
     def _park(self, park: Park) -> None:
         self._parked = park
 
-    def _wake(self, eff: AnyEffect) -> None:
-        self._parked = None
-        self._loop.call_soon(self._drive, eff)
-
     # -- interruption ------------------------------------------------------------------------------
 
     def interrupt_unsafe(self, by: int | None = None) -> None:
-        """Ask the fiber to stop. Returns immediately; use `interrupt()` to also wait."""
+        """Ask the fiber to stop. If it is interruptible and not running (parked, queued, or not
+        started yet), the interrupt runs now, before this returns (internal/effect.ts:590-611);
+        use `interrupt()` to also wait for a running or masked fiber."""
         if self._exit is not None:
             return
         cause = Cause.interrupt(by)
         self.interrupted = cause if self.interrupted is None else self.interrupted + cause
-        parked = self._parked
-        if not self.running and parked is not None and self.interruptible and not parked.done:
-            self._interrupt_parked(parked)
+        if self.running or not self.interruptible:
+            self._deferred = True  # picked up at the next step, or when the mask ends
         else:
-            self._deferred = True  # running, not started yet, or masked: picked up later
+            self._interrupt_now()
 
     def take_interrupt(self) -> Cause[Never]:
         """Deliver the pending interrupt: the one place `_deferred` is cleared, so an interrupt
@@ -166,9 +337,10 @@ class Fiber(Generic[A_co, E_co]):
         self._deferred = False
         return self.interrupted or Cause.interrupt()
 
-    def _interrupt_parked(self, parked: Park) -> None:
-        parked.done = True  # a late resume() is now ignored
-        self._wake(Failure(self.take_interrupt()))
+    def _interrupt_now(self) -> None:
+        if self._parked is not None:
+            self._parked.done = True  # a late resume, or the queued step, is now ignored
+        self.evaluate(Failure(self.take_interrupt()))
 
     # -- finishing ---------------------------------------------------------------------------------
 
@@ -333,21 +505,21 @@ def _start[A, E](
     parent: Fiber[Any, Any] | None,
     eff: Effect[A, E, Any],
     ctx: ContextMap,
-    loop: asyncio.AbstractEventLoop,
-    immediate: bool = False,
+    spawner: Fiber[Any, Any] | None = None,
+    immediate: bool = True,
     interruptible: bool = True,
 ) -> Fiber[A, E]:
     """Effect v4: forkUnsafe, internal/effect.ts:5614-5637. ``immediate`` runs the child's first
-    slice now, inside the caller's drive, until it parks or ends; otherwise it is scheduled."""
-    child: Fiber[A, E] = Fiber(loop, ctx, parent)
+    slice now, inside the caller's drive, until it parks or ends; otherwise its start is queued
+    at priority 0 on the ``spawner``'s dispatcher (the forking fiber, parent or not)."""
+    child: Fiber[A, E] = Fiber(ctx, parent)
     child.interruptible = interruptible
     if parent is not None:
         parent.children.add(child)
-    drive = child._drive  # pyright: ignore[reportPrivateUsage]
-    if immediate:
-        drive(eff)
+    if immediate or spawner is None:
+        child.evaluate(eff)
     else:
-        loop.call_soon(drive, eff)
+        spawner.current_dispatcher.schedule_task(lambda: child.evaluate(eff), 0)
     return child
 
 
@@ -369,7 +541,7 @@ def fork[A, E, R](
                 p,
                 eff,
                 p.context,
-                p._loop,  # pyright: ignore[reportPrivateUsage]
+                p,
                 start_immediately,
                 p.interruptible if uninterruptible == "inherit" else True,
             )
@@ -394,7 +566,7 @@ def fork_daemon[A, E, R](
                 None,
                 eff,
                 p.context,
-                p._loop,  # pyright: ignore[reportPrivateUsage]
+                p,
                 start_immediately,
                 p.interruptible if uninterruptible == "inherit" else True,
             )
@@ -539,9 +711,7 @@ def _for_each_concurrent[A, B, E, R](
                 return WithFiber(lambda p, first=eff: Async(lambda cb: register(p, first, cb)))
             else:
                 effect = None
-                # Every go() runs on the caller's loop: in its drive, or in a child's observer.
-                loop = asyncio.get_running_loop()
-                fiber = _start(None, eff, parent.context, loop, True, parent.interruptible)
+                fiber = _start(None, eff, parent.context, interruptible=parent.interruptible)
                 if fiber.exit is not None:
                     terminal = step(fiber.exit, index)
                     if terminal is not None:
@@ -586,11 +756,12 @@ def _for_each_concurrent[A, B, E, R](
 
 
 async def run_exit[A, E](eff: Effect[A, E, Never]) -> Exit[A, E]:
-    """Run on the current asyncio loop and return the Exit. Cancelling the awaiting task
-    interrupts the fiber and waits for its finalizers before re-raising CancelledError."""
-    loop = asyncio.get_running_loop()
-    fut: asyncio.Future[Exit[A, E]] = loop.create_future()
-    fiber = _start(None, eff, EMPTY_CONTEXT, loop)
+    """Run on the current asyncio loop and return the Exit. The fiber starts at once, so its
+    synchronous prefix runs before this first awaits (internal/effect.ts:5777, runForkWith).
+    Cancelling the awaiting task interrupts the fiber and waits for its finalizers before
+    re-raising CancelledError."""
+    fut: asyncio.Future[Exit[A, E]] = asyncio.get_running_loop().create_future()
+    fiber = _start(None, eff, EMPTY_CONTEXT)
     fiber.add_observer(lambda ex: None if fut.done() else fut.set_result(ex))
     try:
         return await asyncio.shield(fut)
@@ -609,8 +780,12 @@ async def run[A](eff: Effect[A, Never, Never]) -> A:
 
 
 __all__ = [
+    "DEFAULT_SCHEDULER",
     "UNIT",
     "Fiber",
+    "MixedScheduler",
+    "SchedulerDispatcher",
+    "SchedulerService",
     "await_all",
     "for_each",
     "fork",
@@ -618,4 +793,5 @@ __all__ = [
     "interrupt_all",
     "run",
     "run_exit",
+    "with_dispatcher",
 ]

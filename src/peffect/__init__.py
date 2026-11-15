@@ -46,7 +46,11 @@ from peffect.core import (
 )
 from peffect.deferred import Deferred
 from peffect.fiber import (
+    DEFAULT_SCHEDULER,
     Fiber,
+    MixedScheduler,
+    SchedulerDispatcher,
+    SchedulerService,
     await_all,
     for_each,
     fork,
@@ -54,12 +58,15 @@ from peffect.fiber import (
     interrupt_all,
     run,
     run_exit,
+    with_dispatcher,
 )
 from peffect.layer import CurrentMemoMap, Layer, MemoMap, provide_layer
 from peffect.resources import acquire_release, acquire_use_release, add_finalizer
+from peffect.scheduler import MaxOpsBeforeYield, PreventSchedulerYield, Scheduler
 from peffect.scope import Closeable, Scope, ScopeService, scope, scoped
 
 __all__ = [
+    "DEFAULT_SCHEDULER",
     "Cause",
     "Clock",
     "ClockService",
@@ -80,9 +87,15 @@ __all__ = [
     "Interrupt",
     "Interrupted",
     "Layer",
+    "MaxOpsBeforeYield",
     "MemoMap",
     "MissingService",
+    "MixedScheduler",
+    "PreventSchedulerYield",
     "Reference",
+    "Scheduler",
+    "SchedulerDispatcher",
+    "SchedulerService",
     "Scope",
     "ScopeService",
     "Success",
@@ -130,5 +143,6 @@ __all__ = [
     "uninterruptible",
     "uninterruptible_mask",
     "update_context",
+    "with_dispatcher",
     "yield_now",
 ]

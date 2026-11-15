@@ -67,7 +67,7 @@ async def main() -> None:
     @gen
     def supervisor():
         worker = yield from fork(never.pipe(ensuring(sync(lambda: log.append("worker cleaned")))))
-        yield from sleep(0.01)
+        yield from sleep(10)  # milliseconds
         yield from worker.interrupt()
         log.append("after interrupt")
         ended = yield from worker.await_()

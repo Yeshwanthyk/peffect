@@ -63,7 +63,10 @@ Mistakes this prevents (rows C1–C8 in `docs/INVARIANTS.md`):
 Read time and sleep through `current_time_millis` / `sleep`, never `time.time()` or
 `asyncio.sleep` inside an effect: those bypass the fiber's Clock, so a provided Clock (and later
 TestClock) can't control them. Swap time with `provide(Clock.context(my_clock))`; `my_clock` only
-needs the `ClockService` members. Rows CL1–CL5 in `docs/INVARIANTS.md`.
+needs the `ClockService` members, and its `sleep` receives a `Duration` (`peffect.duration`).
+`sleep` takes a `Duration.Input` as upstream: a Duration, a string such as `"5 seconds"`, or a
+bare number of **milliseconds** (`sleep(10)` is 10 ms, not 10 s). Rows CL1–CL5 in
+`docs/INVARIANTS.md`.
 
 ## Conventions
 

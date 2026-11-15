@@ -15,7 +15,7 @@ a = yield from f.join()                             #   -> E gains job's E
 yield from f.interrupt()                            #   interrupt AND wait for its finalizers
 x, y = yield from all_(a(), b(), concurrency=4)     #   first failure interrupts the rest
 w = yield from race(a(), b())                       #   loser interrupted
-yield from sleep(1.0)                               # Clock is a Reference -> TestClock in tests
+yield from sleep("1 second")                        # Duration.Input; a bare number is millis
 
 yield from eff.pipe(ensuring(cleanup))              # finalizers always run, uninterruptibly
 conn = yield from acquire_release(open_(), close)   # SCOPE: R gains Scope
@@ -31,6 +31,9 @@ yield from task().pipe(retry(exponential(0.1).pipe(up_to(5))))   # SCHEDULE: eff
 
 An Effect is a node the fiber's run loop evaluates. Evaluating a node returns the next node, so
 composition never becomes Python recursion. Matches `internal/effect.ts:673-770` (run loop).
+Wakes do nest: a resume or interrupt runs the woken fiber inside the caller's step, as upstream
+does (`effect.ts:605-611`, `:1220-1226`), so a deep chain of synchronous wakes is bounded by
+Python's recursion limit (INVARIANTS SC7, measured).
 
 | node | evaluates to | v4 |
 |---|---|---|
@@ -40,7 +43,7 @@ composition never becomes Python recursion. Matches `internal/effect.ts:673-770`
 | `Suspend(thunk)` | `thunk()`: build the next effect lazily (gen, recursion) | `effect.ts:1045` |
 | `Async(register)` | park; `resume(effect)` once; optional cancel effect | `effect.ts:1206` |
 | `WithFiber(f)` | `f(fiber)`: read/modify the running fiber | `core.ts:640` |
-| `YieldNow` | hand the loop back to asyncio, continue later | `effect.ts:1091` |
+| `YieldNow` | queue the next step on the fiber's dispatcher, continue later | `effect.ts:773-781` |
 
 `Success`/`Failure` are the `Exit` type *and* effects: an Exit is an effect that's already done.
 
@@ -75,8 +78,12 @@ observers, exit. (`effect.ts:521-567`)
 - **Async** resume wins once; a resume during `register` is used without parking; on interrupt the
   `AsyncCancel` frame runs the cancel effect masked (`effect.ts:1218-1273`).
 - **Finish**: interrupt live children, wait for them, then publish the Exit once to observers.
-- **Fairness**: after 2048 ops the loop reschedules itself with `loop.call_soon`
-  (`Scheduler.ts:198`).
+- **Fairness**: after `MaxOpsBeforeYield` ops (default 2048) the loop asks the `Scheduler`
+  Reference's `should_yield` and, if it agrees, queues its next step on the fiber's dispatcher;
+  `PreventSchedulerYield` turns the check off. The default `MixedScheduler` batches tasks onto one
+  `loop.call_soon` per batch, ordered by priority, FIFO within one (`Scheduler.ts:198-271`).
+  `with_dispatcher(f)` hands `f` the running fiber's dispatcher, so work queued on it is ordered
+  with the fiber's own steps; `DEFAULT_SCHEDULER` is exported for schedulers that wrap it. See INVARIANTS `## Scheduler`.
 - **Generators**: a failed `yield from` never re-enters the generator (no `.throw()`, as v4,
   `effect.ts:1487-1519`), but we do `.close()` it so its `finally` runs at a known time.
 

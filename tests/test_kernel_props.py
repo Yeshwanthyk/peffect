@@ -295,9 +295,9 @@ async def test_interrupt_at_any_tick(p: Prog, ticks: int):
     published: list[Any] = []
 
     async def scenario() -> None:
-        # started directly, not via run_exit: that costs a loop turn, and most programs would
-        # finish inside it. Tick 0 now means "before the first step".
-        target: Fiber[Any, Any] = _start(None, compile_(p, r), {}, asyncio.get_running_loop())
+        # started directly, as a root: it runs its first slice now (internal/effect.ts:5777), so
+        # tick 0 means "after the first slice, before any wake".
+        target: Fiber[Any, Any] = _start(None, compile_(p, r), {})
 
         def on_publish(ex: Any) -> None:
             published.append(ex)

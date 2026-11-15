@@ -129,7 +129,7 @@ async def test_interrupt_runs_finalizers_and_skips_catch():
                 ensuring(sync(lambda: log.append("finalized")))
             )
         )
-        yield from sleep(0.01)
+        yield from sleep(10)
         yield from child.interrupt()  # waits for the finalizer
         log.append("after interrupt")
         return child.exit
@@ -146,10 +146,10 @@ async def test_uninterruptible_region_finishes_before_interrupt_lands():
     def parent():
         child = yield from fork(
             uninterruptible(
-                sleep(0.02).flat_map(lambda _: sync(lambda: log.append("done")))
+                sleep(20).flat_map(lambda _: sync(lambda: log.append("done")))
             ).flat_map(lambda _: sync(lambda: log.append("after region")))
         )
-        yield from sleep(0.005)
+        yield from sleep(5)
         yield from child.interrupt()
         return child.exit
 
@@ -169,7 +169,7 @@ async def test_mask_restore_makes_only_the_use_part_interruptible():
     @gen
     def parent():
         child = yield from fork(uninterruptible_mask(body))
-        yield from sleep(0.005)
+        yield from sleep(5)
         yield from child.interrupt()
 
     await run(parent())
@@ -182,8 +182,8 @@ async def test_sleep_cancelled_on_interrupt():
 
     @gen
     def parent():
-        child = yield from fork(sleep(60))
-        yield from sleep(0.001)
+        child = yield from fork(sleep("1 minute"))
+        yield from sleep(1)
         yield from child.interrupt()
 
     await run(parent())
@@ -198,7 +198,7 @@ async def test_children_interrupted_when_parent_ends():
     @gen
     def parent():
         yield from fork(never.pipe(ensuring(sync(lambda: log.append("child cleaned")))))
-        yield from sleep(0.001)
+        yield from sleep(1)
         return "parent done"
 
     assert await run(parent()) == "parent done"
@@ -227,7 +227,7 @@ async def test_async_resume_counts_once():
 
 async def test_cancelling_the_task_interrupts_and_waits():
     log: list[str] = []
-    eff = never.pipe(ensuring(sleep(0.01).flat_map(lambda _: sync(lambda: log.append("fin")))))
+    eff = never.pipe(ensuring(sleep(10).flat_map(lambda _: sync(lambda: log.append("fin")))))
     task = asyncio.ensure_future(run(eff))
     await asyncio.sleep(0.001)
     task.cancel()

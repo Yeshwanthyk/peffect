@@ -1,7 +1,7 @@
 """Clock: time and sleeping as a service, so a test can swap in its own.
 
     now = yield from current_time_millis           # read through the fiber's Clock
-    yield from sleep(1.5)                          # the fiber's Clock does the sleeping
+    yield from sleep("1.5 seconds")                # the fiber's Clock does the sleeping
     provide(Clock.context(my_clock))(program)      # replace it
 
 `Clock` is a Reference, so using it never adds to R; its default is the live clock.
@@ -18,6 +18,7 @@ from typing import Never, Protocol, final
 
 from .context import Reference
 from .core import Effect, async_, never, succeed, sync, yield_now
+from .duration import Duration, Input, from_input_unsafe, to_millis
 
 NANOS_PER_MILLI = 1_000_000
 REANCHOR_THRESHOLD_NANOS = 1_000_000_000  # wall time re-anchors when it drifts more than 1s
@@ -35,7 +36,7 @@ class ClockService(Protocol):
     def current_time_nanos(self) -> Effect[int, Never, Never]: ...
     @property
     def monotonic_time_nanos(self) -> Effect[int, Never, Never]: ...
-    def sleep(self, seconds: float) -> Effect[None, Never, Never]: ...
+    def sleep(self, duration: Duration) -> Effect[None, Never, Never]: ...
 
 
 # -- the live clock (ClockImpl, internal/effect.ts:6401-6470) -------------------------------------
@@ -83,13 +84,15 @@ class _LiveClock:
     def monotonic_time_nanos(self) -> Effect[int, Never, Never]:
         return sync(self.monotonic_time_nanos_unsafe)
 
-    def sleep(self, seconds: float) -> Effect[None, Never, Never]:
-        # Duration normalizes NaN to zero (Duration.ts:465), and sleepMillis yields for <= 0 and
-        # never wakes for an infinite duration (internal/effect.ts:6419-6420)
-        if math.isnan(seconds) or seconds <= 0:
+    def sleep(self, duration: Duration) -> Effect[None, Never, Never]:
+        # sleepMillis(toMillis(duration)) (internal/effect.ts:6415-6421): <= 0 (-Infinity too) is
+        # a yield, Infinity never wakes; Duration has already turned NaN into zero
+        millis = to_millis(duration)
+        if millis <= 0:
             return yield_now
-        if math.isinf(seconds):
+        if not math.isfinite(millis):
             return never
+        seconds = millis / 1000  # asyncio's call_later takes seconds: the only unit conversion
 
         def register(
             resume: Callable[[Effect[None, Never, Never]], None],
@@ -118,8 +121,9 @@ current_time_nanos: Effect[int, Never, Never] = clock_with(lambda c: c.current_t
 monotonic_time_nanos: Effect[int, Never, Never] = clock_with(lambda c: c.monotonic_time_nanos)
 
 
-def sleep(seconds: float) -> Effect[None, Never, Never]:
-    """Suspend for ``seconds`` on the fiber's Clock. ``<= 0`` (and NaN) is a yield; ``inf`` never
-    wakes. Interrupting it cancels the timer (internal/effect.ts:6476-6477)."""
-    normalized = 0.0 if math.isnan(seconds) else seconds
-    return clock_with(lambda c: c.sleep(normalized))
+def sleep(duration: Input) -> Effect[None, Never, Never]:
+    """Suspend for ``duration`` on the fiber's Clock: a Duration, a string such as ``"5 seconds"``,
+    or a number of milliseconds. ``<= 0`` is a yield; infinity never wakes. Interrupting it cancels
+    the timer. The input is converted when the effect runs, so invalid input is a defect then
+    (internal/effect.ts:6476-6477)."""
+    return clock_with(lambda c: c.sleep(from_input_unsafe(duration)))
