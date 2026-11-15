@@ -416,9 +416,9 @@ def for_each[A, B, E, R](
     """Map each item and its index to an effect; succeed with the values in input order.
 
     Concurrency 1 (the default; below 1 also means 1) runs one item at a time, reading the
-    iterable lazily. Higher runs up to that many items at once as traversal-owned daemon workers that
-    inherit the caller's mask; the first failure interrupts the rest, and defects from their cleanup are
-    kept. Each run starts afresh. Effect v4: forEach, internal/effect.ts:5030-5112."""
+    iterable lazily. Higher runs up to that many items at once as traversal-owned daemon workers
+    that inherit the caller's mask. The first failure interrupts the rest; cleanup defects are kept.
+    Each run starts afresh. Effect v4: forEach, internal/effect.ts:5030-5112."""
     limit = math.inf if concurrency == "unbounded" else max(1, concurrency)
 
     def start() -> Effect[list[B], E, R]:
