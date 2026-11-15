@@ -219,6 +219,14 @@ def _add(a: list[Reason], b: list[Reason]) -> list[Reason]:
     return a + [x for x in b if x not in a]
 
 
+def _elect(v: list[Reason]) -> list[Reason]:
+    """causeElectDefects (Effect v4 internal/effect.ts:184-191): with a die present, every fail
+    becomes a die holding the same value."""
+    if not any(k == "die" for k, _ in v):
+        return v
+    return [("die", x) if k == "fail" else (k, x) for k, x in v]
+
+
 def reference(p: Prog, log: list[str]) -> RExit:
     match p:
         case Pure(v):
@@ -249,7 +257,7 @@ def reference(p: Prog, log: list[str]) -> RExit:
             fin: list[Reason] = [("die", f"f{i}")] if fin_dies else []
             if not fin:
                 return ok, v
-            return False, (fin if ok else _add(v, fin))
+            return False, (fin if ok else _elect(_add(v, fin)))  # combineFinalizerCause
         case Mask(_, body):
             return reference(body, log)
         case Park():

@@ -42,8 +42,11 @@ an AGENTS.md section with the idiom and the mistakes it prevents.
   Marked ✓ once the independent review passes.
 - Tier 2a, Context (2026-11-15): implemented, awaiting independent review. `context.py`, kernel
   `update_context` + `RestoreContext`, read-only `Fiber.context`, `examples/context.py` in
-  `verify-peffect`, rows C1–C8, lesson 04. Clock/TestClock and Scope (the rest of tier 2) are
-  not started.
+  `verify-peffect`, rows C1–C8, lesson 04.
+- Tier 2a, upstream test port (2026-11-15): batches A (Context) and B (kernel finalization) from
+  `docs/UPSTREAM_TESTS.md` pass: `Context.empty`, Context equality (C9), `on_error`,
+  `on_interrupt`, and `on_exit` keeping the body's failure with defect election (K9). Batch C
+  (Clock) is ported and red until Clock lands; TestClock (D) and Scope (E–G) are not started.
 
 ## Order and why
 

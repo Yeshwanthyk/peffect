@@ -102,10 +102,15 @@ async def test_finalizer_runs_after_success_and_failure():
 
 
 async def test_finalizer_failure_combines_causes():
+    """Both reasons are kept; the finalizer's defect elects the body's Fail to a Die holding the
+    same value (Effect v4 combineFinalizerCause + causeElectDefects, internal/effect.ts:4069-4075,
+    184-191; Effect.test.ts:3231 "finalizer errors merged")."""
     eff = fail("first").pipe(on_exit(lambda _: die(Boom())))
     ex = await run_exit(eff)
     assert isinstance(ex, Failure)
-    assert ex.cause.failures == ["first"] and isinstance(ex.cause.defects[0], Boom)
+    assert ex.cause.failures == []
+    first, second = ex.cause.defects
+    assert first == "first" and isinstance(second, Boom)
 
 
 # -- interruption ---------------------------------------------------------------------------------

@@ -8,11 +8,10 @@ Adaptations used throughout:
   `list(ctx.services.items())`, with classes as keys.
 - `Context.make(A, 1)` is `A.context(1)`; `Context.add(ctx, B, 2)` and `Context.merge` are
   `ctx | B.context(2)`.
-- Names that don't exist yet (`Context.empty`) are looked up inside the test that needs them,
-  so the other tests in this file still run.
+- `Context.empty()` is `Context.empty()`.
 """
 
-from typing import Any, Never
+from typing import Any
 
 from peffect import (
     Context,
@@ -40,16 +39,6 @@ class B(Tag[int]): ...
 class C(Tag[int]): ...
 
 
-def upcoming(owner: object, name: str) -> Any:
-    """A public name upstream has and peffect doesn't yet: AttributeError until it does."""
-    return getattr(owner, name)
-
-
-def empty() -> Context[Never]:
-    """Upstream `Context.empty()`."""
-    return upcoming(Context, "empty")()
-
-
 # -- Context.test.ts ------------------------------------------------------------------------------
 
 
@@ -70,7 +59,9 @@ def test_preserves_insertion_order_for_replacements_and_appends():
         def default(cls) -> int:
             return 0
 
-    context = empty() | A.context(1) | Ref.context(2) | B.context(3) | A.context(4) | C.context(5)
+    context = (
+        Context.empty() | A.context(1) | Ref.context(2) | B.context(3) | A.context(4) | C.context(5)
+    )
 
     assert list(context.services.items()) == [(A, 4), (Ref, 2), (B, 3), (C, 5)]
 
@@ -145,8 +136,8 @@ def test_merges_with_right_bias_and_preserves_empty_operand_identity():
     right = A.context(3) | C.context(4)
     merged = left | right
 
-    assert (empty() | left) is left
-    assert (left | empty()) is left
+    assert (Context.empty() | left) is left
+    assert (left | Context.empty()) is left
     assert list(merged.services.items()) == [(A, 3), (B, 2), (C, 4)]
 
 
@@ -220,3 +211,32 @@ async def test_provide_service_restores_the_original_context_if_interrupted_befo
     assert isinstance(ex, Failure) and ex.cause.is_interrupted  # the interrupt landed
     assert ran == []
     assert observed[0] is original[0]
+
+
+def test_equality_handles_nan_and_cycles():
+    """Equal.ts compareBoth/compareObjects: NaN equality and repeated pairs close cycles."""
+
+    class Value(Tag[object]): ...
+
+    assert Value.context(float("nan")) == Value.context(float("nan"))
+    left: list[object] = []
+    right: list[object] = []
+    left.append(left)
+    right.append(right)
+    assert Value.context(left) == Value.context(right)
+    right.append(1)
+    assert Value.context(left) != Value.context(right)
+
+
+def test_equality_checks_data_beyond_a_cycle():
+    """Equal.ts compareOnPath: a repeated pair only discharges that recursive comparison."""
+
+    class Value(Tag[object]): ...
+
+    left: dict[str, object] = {}
+    right: dict[str, object] = {}
+    left.update(loop=left, value=[float("nan"), 1])
+    right.update(loop=right, value=[float("nan"), 1])
+    assert Value.context(left) == Value.context(right)
+    right["value"] = [float("nan"), 2]
+    assert Value.context(left) != Value.context(right)

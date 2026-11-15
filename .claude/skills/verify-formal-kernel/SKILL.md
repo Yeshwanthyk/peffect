@@ -29,9 +29,12 @@ Why the model's pass still means something with them added (an argument, not a c
 nor holds back an interrupt, and the model's "the interrupt unwinds to the top" still describes
 the code.
 
-**Sync:** the model was confirmed against `fiber.py` sha256 `0908880415af…` and `core.py` sha256
-`630c8d74847d…` (2026-11-15, the Context change on top of commit `f76c304`). Replace these with a
-commit hash once the Context change is committed. A change to any symbol in the table, or new code that writes
+**Sync:** Context's protocol baseline is commit `b74fa2f` (2026-11-15).
+Sol independently reran the model and linked tests after the finalization changes on top of
+`1c2828b`: 670 states, depth 21, all configured rules hold. Those changes to `OnExit` callback
+handling and cause election are outside the modeled finalizer-body semantics; upstream runtime
+tests, not this model, check them. The modeled protocol operations are unchanged.
+A change to any symbol in the table, or new code that writes
 `_deferred`, `_parked`, `Park.done`, `_exit`, `children` or `interruptible`, means the model
 needs another look before its pass means anything.
 

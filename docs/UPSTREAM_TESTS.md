@@ -7,6 +7,7 @@ Rule: upstream semantics are the contract. A test keeps upstream's scenario and 
 Status values:
 - **green**: ported, passes against current code.
 - **red: missing API**: ported, fails with `AttributeError` on a name that doesn't exist yet.
+- **green (was red …)**: ported red first (commit 1c2828b), then fixed.
 - **red: behavioral**: ported, an assertion fails against an API that exists.
 - **planned**: batch not ported yet.
 - **deferred**: not ported, with the reason.
@@ -28,16 +29,16 @@ Status values:
 | Upstream | Python test | Status |
 |---|---|---|
 | Context.test.ts:17 keeps the source immutable across additions | `test_keeps_the_source_immutable_across_additions` | green |
-| Context.test.ts:31 preserves Map insertion order for replacements and appends | `test_preserves_insertion_order_for_replacements_and_appends` | red: missing API (`Context.empty`) |
+| Context.test.ts:31 preserves Map insertion order for replacements and appends | `test_preserves_insertion_order_for_replacements_and_appends` | green (was red: missing API `Context.empty`) |
 | Context.test.ts:104 distinguishes an undefined service from an absent service | `test_distinguishes_an_undefined_service_from_an_absent_service` | green |
 | Context.test.ts:278 supports the ReadonlyMap surface through mapUnsafe | `test_supports_the_readonly_map_surface_through_services` | green |
-| Context.test.ts:292 supports equality and JSON materialization | `test_supports_equality` | red: behavioral (no `Context.__eq__`, so `==` is identity) |
-| Context.test.ts:304 merges with right bias and preserves empty operand identity | `test_merges_with_right_bias_and_preserves_empty_operand_identity` | red: missing API (`Context.empty`) |
+| Context.test.ts:292 supports equality and JSON materialization | `test_supports_equality` | green (was red: behavioral, `==` was identity) |
+| Context.test.ts:304 merges with right bias and preserves empty operand identity | `test_merges_with_right_bias_and_preserves_empty_operand_identity` | green (was red: missing API `Context.empty`) |
 | Context.test.ts:332 resolves reference defaults lazily and caches them | `test_resolves_reference_defaults_lazily_and_caches_them` | green |
 | Effect.test.ts:405 Context.Service | `test_context_service` | green |
 | Effect.test.ts:131 provideService restores the original context if interrupted before its body | `test_provide_service_restores_the_original_context_if_interrupted_before_its_body` | green (D4) |
 
-Equality follows `Context.ts:637-649`, not dict equality: both sides must be Contexts, same size, same keys, `Equal.equals` values, any order; the hash is the size. A plain mapping with the same items is not equal.
+Equality follows `Context.ts:637-649`, not dict equality: both sides must be Contexts, same size, same keys, value comparison in any order; the hash is the size. A plain mapping with the same items is not equal.
 
 Deferred from `Context.test.ts`: `toJSON`, Redactable, `pick` / `omit` / `addOrOmit` (no such API yet), the `makeUnsafe`-retains-map case (D3), and tests of upstream internals. The pure getters (`getOption`, `getUnsafe`, `get`) have no peffect counterpart; membership in `services` and a lookup inside `provide` assert the same facts.
 
@@ -47,16 +48,20 @@ All of `Effect.test.ts:3153-3270` (describe "finalization").
 
 | Upstream | Python test | Status |
 |---|---|---|
-| :3160 onExit preserves the original failure when the finalizer throws | `test_on_exit_preserves_the_original_failure_when_the_finalizer_throws` | red: behavioral (got `Die(FIN)` only; the body failure is lost) |
+| :3160 onExit preserves the original failure when the finalizer throws | `test_on_exit_preserves_the_original_failure_when_the_finalizer_throws` | green (was red: behavioral, the body failure was lost) |
 | :3169 onExit reports a thrown finalizer on success | `test_on_exit_reports_a_thrown_finalizer_on_success` | green |
-| :3175 an outer onInterrupt still sees the interruption after an inner finalizer throws | `test_an_outer_on_interrupt_still_sees_the_interruption_after_an_inner_finalizer_throws` | red: missing API (`on_interrupt`) |
+| :3175 an outer onInterrupt still sees the interruption after an inner finalizer throws | `test_an_outer_on_interrupt_still_sees_the_interruption_after_an_inner_finalizer_throws` | green (was red: missing API `on_interrupt`) |
 | :3195 nested throwing finalizers do not overflow the stack | `test_nested_throwing_finalizers_do_not_overflow_the_stack` | green (20,000 deep) |
 | :3203 fail ensuring | `test_fail_ensuring` | green |
-| :3216 fail on error | `test_fail_on_error` | red: missing API (`on_error`) |
-| :3231 finalizer errors merged | `test_finalizer_errors_merged` | red: behavioral (`Fail(EXAMPLE)` is not elected to `Die`) |
+| :3216 fail on error | `test_fail_on_error` | green (was red: missing API `on_error`) |
+| :3231 finalizer errors merged | `test_finalizer_errors_merged` | green (was red: behavioral, no defect election) |
 | :3249 finalizer errors reported | `test_finalizer_errors_reported` | green |
 
-Approved fix, after review of this red evidence: repair it in `on_exit`, the primitive that owns it, not in Scope. Keep every reason, and elect defects as upstream's `causeElectDefects` does (`internal/effect.ts:184-191`): when a cause holds a Die, each Fail becomes a Die.
+Fixed in `on_exit`, the primitive that owns it, not in Scope (INVARIANTS K9). A finalizer callback that raises becomes that finalizer's `Die` (upstream `exitDie(defect)` in OnExit, `internal/effect.ts:4285-4300`); on a failure its cause is added to the body's and defects are elected (`combineFinalizerCause`, `:4069-4075`; `causeElectDefects`, `:184-191`). Election means a `Die` can hold a non-exception value, as upstream's `Die.defect: unknown`, so `Die.defect` is now `object`; `squash()` raises such a value inside `DefectError`. `on_error` and `on_interrupt` are compositions of `on_exit` (`:4411-4425`, `:4485-4499`).
+
+Old expectations changed to upstream's, each because election now applies:
+- `tests/test_kernel.py::test_finalizer_failure_combines_causes`: was `failures == ["first"]` beside a `Boom` defect; now both reasons are defects, `"first"` then `Boom`. Source: Effect.test.ts:3231 and `causeElectDefects`.
+- `tests/test_kernel_props.py` reference interpreter: `Ensure` with a dying finalizer now elects (`_elect`). Source: `combineFinalizerCause`. Reason retention (`_add`), the masking checks and the stack-safety test are unchanged.
 
 ## Batch C: Clock — `tests/test_clock.py`
 
@@ -86,3 +91,16 @@ Deferred elsewhere in these upstream files:
 - Layer tests: tier 4.
 - `MaxOpsBeforeYield`: no scheduler hook.
 - The `updateServiceScoped` reset option: no such option yet.
+
+### Equality adaptation and independent review
+
+NaN and recursive list/tuple/dict values follow Equal.ts's repeated-pair cycle rule, with
+comparison-local path tracking. Tests also check unequal data beyond a cycle. Python numeric
+values compare numerically (bool is distinct); other service objects use their Python equality
+protocol. Dict keys use Python key semantics. This is not a full port of JavaScript Equal's
+Map/Set, custom symbol, function, Date, RegExp, or typed-array protocols; those need their own
+upstream tests before being claimed. No cross-call result cache is kept for mutable Python values.
+
+Sol confirmed finalization semantics and 69 tests before these equality regressions were added.
+The formal Sync note now names the committed Context baseline and explicitly excludes finalizer
+body/cause semantics from its proof.

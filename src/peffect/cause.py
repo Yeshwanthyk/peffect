@@ -9,6 +9,10 @@ A failed effect doesn't carry one exception; it carries a Cause: an ordered tupl
 One Cause can hold several: a request failed AND its cleanup crashed AND a sibling was interrupted.
 Flat like Effect v4 (src/Cause.ts:79-82); `+` keeps order and drops exact duplicates
 (src/internal/core.ts:283-323).
+
+A Die's defect is any value, as in v4 (`Die.defect: unknown`): when a defect is present, a
+finalizer's combine elects every Fail to a Die (`elect_defects`), and a Fail's error need not be
+an exception. `die()` still takes an exception; only election makes a non-exception defect.
 """
 
 from __future__ import annotations
@@ -28,7 +32,7 @@ class Fail(Generic[E_co]):
 @final
 @dataclass(frozen=True, slots=True)
 class Die:
-    defect: BaseException
+    defect: object
 
 
 @final
@@ -64,6 +68,13 @@ class Cause(Generic[E_co]):
         out.extend(r for r in other.reasons if r not in out)
         return Cause(tuple(out))
 
+    def elect_defects(self) -> Cause[E_co]:
+        """If a Die is present, every Fail becomes a Die holding its error, in place.
+        Effect v4: causeElectDefects, internal/effect.ts:184-191."""
+        if not (self.defects and self.failures):
+            return self
+        return Cause(tuple(Die(r.error) if isinstance(r, Fail) else r for r in self.reasons))
+
     def without_fails(self) -> Cause[Never]:
         return Cause(tuple(r for r in self.reasons if not isinstance(r, Fail)))
 
@@ -73,7 +84,7 @@ class Cause(Generic[E_co]):
         return [r.error for r in self.reasons if isinstance(r, Fail)]
 
     @property
-    def defects(self) -> list[BaseException]:
+    def defects(self) -> list[object]:
         return [r.defect for r in self.reasons if isinstance(r, Die)]
 
     @property
@@ -93,7 +104,8 @@ class Cause(Generic[E_co]):
                 return err if isinstance(err, BaseException) else FailureError(err)
         for r in self.reasons:
             if isinstance(r, Die):
-                return r.defect
+                d = r.defect
+                return d if isinstance(d, BaseException) else DefectError(d)
         return Interrupted(self)
 
 
@@ -103,6 +115,14 @@ class FailureError(Exception):
     def __init__(self, error: object) -> None:
         super().__init__(error)
         self.error = error
+
+
+class DefectError(Exception):
+    """A defect that isn't an exception (an elected Fail), raised at the run() boundary."""
+
+    def __init__(self, defect: object) -> None:
+        super().__init__(defect)
+        self.defect = defect
 
 
 class Interrupted(Exception):

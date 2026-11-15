@@ -9,9 +9,10 @@ Effect v4: Context.ts (Service, Reference), internal/effect.ts:2379-2397 (provid
 
 from __future__ import annotations
 
+import math
 from collections.abc import Generator, Mapping
 from types import MappingProxyType
-from typing import Any, ClassVar, Generic, Never, Self, TypeVar, final, overload
+from typing import Any, ClassVar, Generic, Never, Self, TypeVar, cast, final, overload
 
 from .core import ContextMap, Effect, WithFiber, die, succeed, update_context
 
@@ -100,6 +101,44 @@ class _Token:
 _TOKEN = _Token()
 
 
+def _equal_values(left: Any, right: Any, path: set[tuple[int, int]]) -> bool:
+    """Equal.ts:186-238: identity, NaN, and coinductive container comparison.
+
+    Python lists/tuples and dict values recurse; other service objects retain their Python
+    equality protocol. Path assumptions are local to this comparison, never cached globally.
+    """
+    if left is right:
+        return True
+    if type(left) in (int, float) and type(right) in (int, float):
+        return bool(left == right) or (
+            isinstance(left, float)
+            and isinstance(right, float)
+            and math.isnan(left)
+            and math.isnan(right)
+        )
+    if type(left) is not type(right):
+        return False
+    pair = (id(left), id(right))
+    if pair in path:
+        return True
+    path.add(pair)
+    try:
+        if isinstance(left, (list, tuple)):
+            a, b = cast(list[Any] | tuple[Any, ...], left), cast(list[Any] | tuple[Any, ...], right)
+            return len(a) == len(b) and all(
+                _equal_values(x, y, path) for x, y in zip(a, b, strict=True)
+            )
+        if isinstance(left, dict):
+            a_map, b_map = cast(dict[Any, Any], left), cast(dict[Any, Any], right)
+            return len(a_map) == len(b_map) and all(
+                key in b_map and _equal_values(value, b_map[key], path)
+                for key, value in a_map.items()
+            )
+        return bool(left == right)
+    finally:
+        path.remove(pair)
+
+
 @final
 class Context(Generic[T_contra]):
     """Services for the tags in T, built only by ``Users.context(impl)`` and ``a | b``.
@@ -119,8 +158,35 @@ class Context(Generic[T_contra]):
     def services(self) -> Mapping[type, Any]:
         return self._services
 
+    @staticmethod
+    def empty() -> Context[Never]:
+        """The context with no services: one shared, immutable instance (Context.ts:744-745)."""
+        return _EMPTY
+
     def __or__[T, T2](self: Context[T], other: Context[T2]) -> Context[T | T2]:
+        # an empty side returns the other one itself (Context.ts:1192-1193). Only empty() is
+        # empty (every other context is built from a tag), so the empty side's T is Never.
+        if not self.services:
+            return cast(Context[T | T2], other)
+        if not other.services:
+            return cast(Context[T | T2], self)
         return Context({**self.services, **other.services}, _TOKEN)
+
+    def __eq__(self, other: object) -> bool:
+        """Same keys, equal values, in any order; only another Context (Context.ts:637-645).
+        Values use identity, NaN and recursive container equality, then Python object equality."""
+        if not isinstance(other, Context):
+            return False
+        mine, theirs = self.services, cast(Context[Any], other).services
+        return len(mine) == len(theirs) and all(
+            k in theirs and _equal_values(v, theirs[k], set()) for k, v in mine.items()
+        )
+
+    def __hash__(self) -> int:
+        return len(self.services)  # the size, as upstream (Context.ts:646-648)
+
+
+_EMPTY: Context[Never] = Context({}, _TOKEN)
 
 
 @final

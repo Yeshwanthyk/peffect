@@ -1,6 +1,6 @@
 """peffect: Effect-style programs for Python. See docs/DESIGN.md."""
 
-from peffect.cause import Cause, Die, Fail, FailureError, Interrupt, Interrupted
+from peffect.cause import Cause, DefectError, Die, Fail, FailureError, Interrupt, Interrupted
 from peffect.context import Context, MissingService, Reference, Tag, provide
 from peffect.core import (
     ContextMap,
@@ -22,7 +22,9 @@ from peffect.core import (
     gen,
     interruptible,
     never,
+    on_error,
     on_exit,
+    on_interrupt,
     sleep,
     succeed,
     suspend,
@@ -38,6 +40,7 @@ __all__ = [
     "Cause",
     "Context",
     "ContextMap",
+    "DefectError",
     "Die",
     "Do",
     "Effect",
@@ -67,7 +70,9 @@ __all__ = [
     "gen",
     "interruptible",
     "never",
+    "on_error",
     "on_exit",
+    "on_interrupt",
     "provide",
     "run",
     "run_exit",

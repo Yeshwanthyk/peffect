@@ -31,7 +31,7 @@ from functools import wraps
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, Never, TypeVar, cast, final, overload
 
-from peffect.cause import Cause
+from peffect.cause import Cause, Interrupt
 
 if TYPE_CHECKING:
     from peffect.fiber import Fiber
@@ -350,14 +350,23 @@ class OnExit(Effect[A_co, E_co, R_co], Frame):
         _mask_while_popping(fiber)
         return None
 
+    def _finalizer(self, exit_: Exit[Any, Any]) -> AnyEffect:
+        try:
+            return self.f(exit_)
+        except Exception as e:  # f raised instead of returning an effect: a defect of the finalizer
+            return Failure(Cause.die(e))
+
     def on_ok(self, value: Any, fiber: AnyFiber) -> AnyEffect | None:
         exit_ = Success(value)
-        return OnSuccess(self.f(exit_), lambda _: exit_)
+        return OnSuccess(self._finalizer(exit_), lambda _: exit_)
 
     def on_err(self, cause: Cause[Any], fiber: AnyFiber) -> AnyEffect | None:
         exit_: Failure[Any] = Failure(cause)
-        # a finalizer that fails adds its cause to the original one
-        fin: AnyEffect = OnFailure(self.f(exit_), lambda c2: Failure(cause + c2))
+        # a failing finalizer adds its cause to the original, then defects are elected
+        # (combineFinalizerCause, internal/effect.ts:4069-4075)
+        fin: AnyEffect = OnFailure(
+            self._finalizer(exit_), lambda c2: Failure((cause + c2).elect_defects())
+        )
         return OnSuccess(fin, lambda _: exit_)
 
 
@@ -733,6 +742,32 @@ class on_exit[R2]:
 
 def ensuring[R2](finalizer: Effect[Any, Never, R2]) -> on_exit[R2]:
     return on_exit(lambda _exit: finalizer)
+
+
+def on_error[R2](f: Callable[[Cause[Any]], Effect[Any, Never, R2]]) -> on_exit[R2]:
+    """Run ``f(cause)`` if the effect fails (interruption included), masked. Effect v4:
+    onError, internal/effect.ts:4411-4425."""
+
+    def finalizer(exit_: Exit[Any, Any]) -> Effect[Any, Never, R2]:
+        return f(exit_.cause) if isinstance(exit_, Failure) else succeed(None)
+
+    return on_exit(finalizer)
+
+
+def on_interrupt[R2](f: Callable[[frozenset[int]], Effect[Any, Never, R2]]) -> on_exit[R2]:
+    """Run ``f(interruptors)`` if the effect's cause holds an interruption, masked. The set holds
+    the interrupting fiber ids that are known. Effect v4: onInterrupt, internal/effect.ts:4485-4499
+    (causeFilterInterruptors, :224)."""
+
+    def on_cause(cause: Cause[Any]) -> Effect[Any, Never, R2]:
+        if not cause.is_interrupted:
+            return succeed(None)
+        ids = frozenset(
+            r.by for r in cause.reasons if isinstance(r, Interrupt) and r.by is not None
+        )
+        return f(ids)
+
+    return on_error(on_cause)
 
 
 # ================================================================================================

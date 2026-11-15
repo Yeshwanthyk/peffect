@@ -50,7 +50,7 @@ Derived: `Fiber.exit` (property), `Cause.is_interrupted` etc. Nothing is cached.
 | K6 | **Masks hold.** No interrupt is delivered while `interruptible` is False. | every delivery site checks `interruptible` |
 | K7 | **Interrupts land.** A requested interrupt is delivered at the next interruptible point; a fiber that finishes after one has `Interrupt` in its cause, unless it had already finished. | `_deferred`, `SetInterruptible`, `_drive` tail |
 | K8 | **No orphans.** A fiber publishes only after every child it forked has published. | `_done` |
-| K9 | **Causes don't lose reasons**, except: the typed `Fail`s of a skipped handler's region are dropped on interrupt (v4 `core.ts:601-629`). Stronger than v4 in two places: a defect unwinding out of a mask, and a body's exit when an interrupt lands while waiting on children, keep their reasons (v4 replaces them with the interrupt). | `Cause.__add__`, `OnExit.on_err`, `Failure._eval`, `Fiber._done` |
+| K9 | **Causes don't lose reasons**, except: the typed `Fail`s of a skipped handler's region are dropped on interrupt (v4 `core.ts:601-629`). Stronger than v4 in two places: a defect unwinding out of a mask, and a body's exit when an interrupt lands while waiting on children, keep their reasons (v4 replaces them with the interrupt). A failing or raising finalizer adds its cause to the body's, then defects are elected as v4 does (`combineFinalizerCause`, `causeElectDefects`, internal/effect.ts:4069-4075, 184-191): with a `Die` present, each `Fail` becomes a `Die` holding the same value, so a `Die`'s defect is any value. | `Cause.__add__`, `Cause.elect_defects`, `OnExit._finalizer`, `OnExit.on_err`, `Failure._eval`, `Fiber._done` |
 | K10 | **Stack safety.** Composition depth never becomes Python recursion depth. | nodes return the next node |
 
 ## Proof strategy
@@ -84,6 +84,7 @@ call `interrupt_unsafe` on the running fiber: the model includes that as "interr
 | skip loop disabled (handlers run during an interrupt) | K9: a finalizer's defect missing from the cause |
 | skip loop stops adding `interrupted` | K7: `Failure(Fail('a'))` with no `Interrupt` (pinned `@example`) |
 | old `_done` (wait outside the run loop) | K7: `Success(0)` after an interrupt |
+| `OnExit.on_err` skips `elect_defects` | K9: `test_kernel_matches_reference`, a `fail` left beside a finalizer's `die` |
 
 ## Context
 
@@ -100,6 +101,7 @@ services; `context.py` (Tag, Reference, Context, `provide`) is built on them and
 | C6 | **Concrete tags are final.** Lookup is by exact class, and R is covariant, so a parent-tag context would type-check against a child-tag request it can't answer. Subclassing any tag other than `Tag`/`Reference` raises `TypeError`; `Tag`/`Reference` themselves build no context. | `Tag.__init_subclass__`, `Tag.context` | `test_concrete_tags_cannot_be_subclassed`, `test_base_tags_build_no_context` |
 | C7 | **A `Context[T]` holds a service for every tag in T.** No public constructor (a private token); built only by `Tag.context` and `\|` (right side wins); its `services` view is read-only. Contravariant in T. | `Context.__init__`, `Context.__or__` | `test_context_has_no_public_constructor_and_merges_right_wins`, `test_merged_context_right_side_wins_at_runtime`; should_fail 10–11 |
 | C8 | **A missing service is a `MissingService` defect**, never `None`. With C7 and the R typing, only an `update_context` that drops services can reach it. | `Tag._find` | `test_missing_service_is_a_defect` |
+| C9 | **Empty identity and Context comparison.** `Context.empty()` is one shared instance; `a \| empty` and `empty \| a` return `a` itself. Two Contexts are `==` when they have the same keys and each value matches by identity, NaN equality, recursive list/tuple/dict comparison (cycles allowed), or Python object equality, in any order; anything that is not a Context is unequal; the hash is the size (Context.ts:637-649, 744-745, 1192-1193). | `Context.empty`, `Context.__or__`, `Context.__eq__`, `Context.__hash__` | `tests/test_context_upstream.py`: `test_supports_equality`, `test_merges_with_right_bias_and_preserves_empty_operand_identity`, `test_preserves_insertion_order_for_replacements_and_appends` |
 
 **R typing** (`provide`, two overloads, exact match first). Python has no `Exclude`, so:
 

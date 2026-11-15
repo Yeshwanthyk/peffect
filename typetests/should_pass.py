@@ -1,8 +1,9 @@
 """Kernel types pyright must infer. Checked by tests/test_types.py."""
 
-from typing import Never, assert_type
+from typing import Any, Never, assert_type
 
 from peffect import (
+    Cause,
     Context,
     Effect,
     Exit,
@@ -15,6 +16,8 @@ from peffect import (
     fail,
     fork,
     gen,
+    on_error,
+    on_interrupt,
     provide,
     succeed,
     sync,
@@ -57,6 +60,18 @@ assert_type(both(1).pipe(catch_all(lambda _: succeed(None))), Effect[str | None,
 
 # finalizers don't change A or E
 assert_type(find(1).pipe(ensuring(sync(lambda: None))), Effect[str, NotFound, Never])
+
+
+def on_cause(cause: Cause[Any]) -> Effect[None, Never, Never]:
+    return sync(lambda: None)
+
+
+def on_ids(ids: frozenset[int]) -> Effect[None, Never, Never]:
+    return sync(lambda: None)
+
+
+assert_type(find(1).pipe(on_error(on_cause)), Effect[str, NotFound, Never])
+assert_type(find(1).pipe(on_interrupt(on_ids)), Effect[str, NotFound, Never])
 
 
 # fork / join carry A and E through the Fiber
@@ -112,6 +127,7 @@ assert_type(one_left, Effect[Pair, Never, Log])  # partial
 assert_type(provide(Log.context(Logger()))(one_left), Effect[Pair, Never, Never])  # 2 -> 1 -> 0
 full = Users.context(Repo()) | Log.context(Logger())
 assert_type(full, Context[Users | Log])
+assert_type(Context.empty() | full, Context[Users | Log])  # empty adds no tag
 assert_type(provide(full)(needs_two()), Effect[Pair, Never, Never])  # full
 assert_type(provide(full | Db.context(1))(needs_two()), Effect[Pair, Never, Never])  # more
 overlap = Users.context(Repo()) | Db.context(1)

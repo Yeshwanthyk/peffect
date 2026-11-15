@@ -66,3 +66,14 @@ actual diagnostics in turn and requires rejection. The interrupt-at-install test
 fiber after the real swap; a scratch mutation omitting installation now fails its assertion.
 Verification: `/var/folders/rf/y4ygjrb13bd2nzm69xrc22h40000gn/T/peffect-verify/20261115T155931Z-76623`.
 Upstream test coverage reconciliation remains pending; no broader primitive redesign was made.
+
+## Upstream batches A+B (Context, finalization)
+
+Fixed at the owning primitives, against the committed upstream tests (1c2828b), with no new
+architecture: `OnExit` now turns a raising callback into that finalizer's defect and elects
+defects when combining causes (one method, `Cause.elect_defects`); `on_error` and `on_interrupt`
+are `on_exit` compositions; `Context` gained `empty`, empty-operand identity in `|`, and
+upstream equality/hash. Two scratch breaks went red and were restored: dropping the election
+(4 tests, including the property reference) and letting a raising callback escape `OnExit`
+(2 upstream tests). `Die.defect` widened to `object` because election moves a Fail's value,
+which need not be an exception, into a Die.

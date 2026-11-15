@@ -11,13 +11,11 @@ Adaptations used throughout:
 - `Cause.combine(x, y)` is `x + y`, and `Cause.die(d)` is `Cause.die(d)`.
 - Upstream's `Effect.interrupt` (the fiber fails with its own interruption) is
   `fail_cause(Cause.interrupt())`.
-- `on_interrupt` and `on_error` are looked up inside the tests that use them (`upcoming`), so
-  until they exist those tests alone fail, with AttributeError.
+- `Effect.onInterrupt` / `Effect.onError` are `on_interrupt` / `on_error`.
 """
 
 from typing import Any
 
-import peffect
 from peffect import (
     Cause,
     Die,
@@ -30,7 +28,9 @@ from peffect import (
     fail,
     fail_cause,
     fork,
+    on_error,
     on_exit,
+    on_interrupt,
     run_exit,
     succeed,
     sync,
@@ -44,11 +44,6 @@ class Boom(Exception):
 BODY = Boom("body failure")
 FIN = Boom("finalizer defect")
 EXAMPLE = Boom("Oh noes!")  # upstream ExampleError
-
-
-def upcoming(name: str) -> Any:
-    """A public combinator upstream has and peffect doesn't yet: AttributeError until it does."""
-    return getattr(peffect, name)
 
 
 def throwing(_: object) -> Any:
@@ -73,8 +68,6 @@ async def test_on_exit_reports_a_thrown_finalizer_on_success():
 async def test_an_outer_on_interrupt_still_sees_the_interruption_after_an_inner_finalizer_throws():
     """Effect.test.ts:3175 "an outer onInterrupt still sees the interruption after an inner
     finalizer throws"."""
-    on_interrupt = upcoming("on_interrupt")
-
     finalized: list[bool] = []
 
     def mark(_: object) -> Any:
@@ -113,8 +106,6 @@ async def test_fail_ensuring():
 
 async def test_fail_on_error():
     """Effect.test.ts:3216 "fail on error"."""
-    on_error = upcoming("on_error")
-
     finalized: list[bool] = []
 
     def mark(_: object) -> Any:
