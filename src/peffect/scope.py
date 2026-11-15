@@ -219,6 +219,15 @@ class Scope(Tag[ScopeService]):
         return sync(lambda: Scope.make_unsafe(strategy))
 
     @staticmethod
+    def add_finalizer_unsafe(scope: ScopeService, key: object, finalizer: Finalizer) -> None:
+        """Synchronously register ownership; a closed scope is left alone.
+
+        Python plumbing for Layer's atomic observer registration. Matches the upstream
+        internal scopeAddFinalizerUnsafe (:4143-4159), rather than late-add execution.
+        """
+        _add_finalizer_unsafe(scope, key, finalizer)
+
+    @staticmethod
     def add_finalizer_exit(scope: ScopeService, finalizer: Finalizer) -> Effect[None, Never, Never]:
         """scopeAddFinalizerExit, :4123-4134: on a closed scope the finalizer runs now, with the
         exit the scope closed with."""
