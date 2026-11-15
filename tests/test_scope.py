@@ -4,6 +4,9 @@ implementation it pins is src/Scope.ts over internal/effect.ts:4033-4240 (scopeC
 scopeCloseUnsafe, scopeForkUnsafe, scopeAddFinalizerExit, scopeMakeUnsafe, scoped). The
 parallel variants and "executes finalizers in parallel" (:7, needs TestClock) are batch G.
 
+Below the upstream tests: the Scope.ts doc examples that add coverage the tests above don't
+have (the rest repeat it), then source-derived cases where neither has a test, each labelled.
+
 Adaptations used throughout:
 - Scope isn't built yet. Every Scope name is looked up when the test runs (`upcoming`), so until
   it exists each test fails with AttributeError instead of the file failing to import. The
@@ -18,6 +21,8 @@ Adaptations used throughout:
 - Upstream throws strings (`throw "release"`). Python raises exceptions, so a throwing
   finalizer raises `RuntimeError("release")`; `reasons` renders a defect with `str`, as
   upstream's `String(reason.defect)`, giving the same "die:release".
+- `Scope.Scope` (the tag, yielded) is `scope`: upstream defines `Effect.scope` as that tag
+  (internal/effect.ts:4192).
 - `Exit.void` is `Success(None)`; `Exit.fail(e)` is `Failure(Cause.fail(e))`. `it.effect`'s
   ambient Scope and TestClock are not used by these cases, so they run under plain `run`.
 """
@@ -47,6 +52,7 @@ from peffect import (
     uninterruptible,
     yield_now,
 )
+from peffect.context import MissingService
 from peffect.core import AnyFiber, Resume, WithFiber
 
 VOID: Exit[None, Never] = Success(None)
@@ -62,6 +68,18 @@ def upcoming(name: str) -> Any:
 
 def make_unsafe(strategy: str = "sequential") -> Any:
     return upcoming("Scope").make_unsafe(strategy)
+
+
+def make(strategy: str = "sequential") -> Effect[Any, Never, Never]:
+    return upcoming("Scope").make(strategy)
+
+
+def scope_fork(parent: Any, strategy: str = "sequential") -> Effect[Any, Never, Never]:
+    return upcoming("Scope").fork(parent, strategy)
+
+
+def provide_scope(scope: Any) -> Callable[[Effect[Any, Any, Any]], Effect[Any, Any, Never]]:
+    return upcoming("Scope").provide(scope)
 
 
 def fork_unsafe(parent: Any) -> Any:
@@ -97,6 +115,10 @@ def upcoming_scope() -> Effect[Any, Never, Any]:
 
 def state_tag(scope: Any) -> str:
     return scope.state.tag
+
+
+def finalizer_log(log: list[str], entry: str) -> Effect[None, Never, Never]:
+    return sync(lambda: log.append(entry))
 
 
 # -- test-only helpers -------------------------------------------------------------------------
@@ -347,3 +369,182 @@ async def test_closing_the_parent_closes_the_child_with_the_parents_exit_only_on
     await run(close(parent, failure))
     await run(close(child, VOID))
     assert exits == [failure]
+
+
+# -- Scope.ts doc examples (`ts import.meta.vitest` blocks; only those adding coverage) ----------
+
+
+async def test_doc_scope_make_starts_empty_with_its_strategy_and_closes():
+    """Scope.ts:29, `Scope` interface example: `Scope.make("sequential")`."""
+
+    @gen
+    def program():
+        scope = yield from make("sequential")
+        initial = (scope.strategy, state_tag(scope))
+        yield from close(scope, VOID)
+        return initial, state_tag(scope)
+
+    assert await run(program()) == (("sequential", "Empty"), "Closed")
+
+
+async def test_doc_open_state_holds_its_first_finalizer_inline():
+    """Scope.ts:139, `State.Open` example: one finalizer is stored inline, not in the map."""
+    scope = make_unsafe()
+    await run(add_finalizer(scope, succeed(None)))
+    assert state_tag(scope) == "Open"
+    assert scope.state.finalizer is not None
+
+
+async def test_doc_closed_state_keeps_the_exit_it_was_closed_with():
+    """Scope.ts:172, `State.Closed` example."""
+    done: Exit[str, Never] = Success("Done")
+
+    @gen
+    def program():
+        scope = yield from make()
+        yield from close(scope, done)
+        return scope.state.exit if state_tag(scope) == "Closed" else None
+
+    assert await run(program()) is done
+
+
+async def test_doc_scoped_closes_its_scope_on_success():
+    """Scope.ts:207, `Scope` service example: the finalizer runs when `scoped` succeeds."""
+    cleanups: list[str] = []
+
+    @gen
+    def program():
+        scope = yield from upcoming_scope()
+        yield from add_finalizer(scope, finalizer_log(cleanups, "Cleanup"))
+
+    await run(upcoming("scoped")(program()))
+    assert cleanups == ["Cleanup"]
+
+
+async def test_doc_provide_hands_a_caller_managed_scope_to_the_effect():
+    """Scope.ts:298, `provide` example: the finalizer waits for the caller's close."""
+    events: list[str] = []
+
+    @gen
+    def program():
+        scope = yield from upcoming_scope()
+        yield from add_finalizer(scope, finalizer_log(events, "cleanup"))
+        events.append("working")
+
+    @gen
+    def with_scope():
+        scope = yield from make()
+        yield from provide_scope(scope)(program())
+        yield from close(scope, VOID)
+
+    await run(with_scope())
+    assert events == ["working", "cleanup"]
+
+
+async def test_doc_close_runs_three_finalizers_newest_first_after_the_work():
+    """Scope.ts:375, `addFinalizer` example: three finalizers, so close takes the many-finalizer
+    path (the upstream tests above only reach it with a throwing finalizer)."""
+    events: list[str] = []
+
+    @gen
+    def program():
+        scope = yield from make()
+        for n in (1, 2, 3):
+            yield from add_finalizer(scope, finalizer_log(events, f"cleanup {n}"))
+        events.append("work")
+        yield from close(scope, VOID)
+
+    await run(program())
+    assert events == ["work", "cleanup 3", "cleanup 2", "cleanup 1"]
+
+
+async def test_doc_fork_effect_child_closes_before_its_parent():
+    """Scope.ts:409, `fork` example. The child is "parallel" upstream too; with one finalizer
+    its close takes the single-finalizer path, so no parallel finalization is exercised."""
+    cleanups: list[str] = []
+
+    @gen
+    def program():
+        parent = yield from make("sequential")
+        yield from add_finalizer(parent, finalizer_log(cleanups, "parent"))
+        child = yield from scope_fork(parent, "parallel")
+        yield from add_finalizer(child, finalizer_log(cleanups, "child"))
+        yield from close(child, VOID)
+        yield from close(parent, VOID)
+
+    await run(program())
+    assert cleanups == ["child", "parent"]
+
+
+# -- source-derived (no upstream test or example) -----------------------------------------------
+
+
+async def test_source_a_finalizer_added_after_close_runs_at_once_with_the_closed_exit():
+    """scopeAddFinalizerExit, internal/effect.ts:4123-4130: on a Closed scope the finalizer is
+    called immediately with `scope.state.exit`, and nothing is registered."""
+    scope = make_unsafe()
+    failure: Exit[Never, str] = Failure(Cause.fail("closed"))
+    exits: list[Exit[Any, Any]] = []
+    await run(close(scope, failure))
+    await run(add_finalizer_exit(scope, lambda ex: sync(lambda: exits.append(ex))))
+    assert len(exits) == 1 and exits[0] is failure
+    assert state_tag(scope) == "Closed"
+
+
+async def test_source_forking_a_closed_parent_gives_a_child_closed_with_the_parents_exit():
+    """scopeForkUnsafe, internal/effect.ts:4113-4116: the child takes the parent's Closed state
+    and is not registered with it; a finalizer added to the child runs at once with that exit."""
+    parent = make_unsafe()
+    failure: Exit[Never, str] = Failure(Cause.fail("parent closed"))
+    await run(close(parent, failure))
+    child = fork_unsafe(parent)
+    assert state_tag(child) == "Closed"
+    assert child.state.exit is failure
+    exits: list[Exit[Any, Any]] = []
+    await run(add_finalizer_exit(child, lambda ex: sync(lambda: exits.append(ex))))
+    assert len(exits) == 1 and exits[0] is failure
+    assert state_tag(parent) == "Closed"
+
+
+async def test_source_direct_close_keeps_every_failure_reason_and_elects_no_defect():
+    """scopeCloseFinalizers + exitAsVoidAll, internal/effect.ts:4077-4101 and :2221-2234: each
+    finalizer's Exit is collected newest first and their reasons are concatenated as they are.
+    Equal reasons are not merged, and a Fail next to a Die stays a Fail: defect election
+    (combineFinalizerCause, :4069-4075) belongs to a body's exit, not to a direct close."""
+
+    def throwing(_: Exit[Any, Any]) -> Effect[None, Never, Never]:
+        raise RuntimeError("release")
+
+    scope = make_unsafe()
+
+    @gen
+    def program():
+        yield from add_finalizer(scope, fail("boom"))
+        yield from add_finalizer(scope, fail("boom"))
+        yield from add_finalizer_exit(scope, throwing)
+        return (yield from exit_of(close(scope, VOID)))
+
+    ex = await run(program())
+    assert reasons(ex) == ["die:release", "fail:boom", "fail:boom"]
+
+
+async def test_source_scoped_restores_the_context_before_running_finalizers():
+    """scoped, internal/effect.ts:4204-4215: the exit handler sets the context back to the one
+    from before `scoped`, then closes the scope. So a finalizer no longer sees the Scope service:
+    reading it there dies with the missing service."""
+    seen: list[Exit[Any, Any]] = []
+
+    def record(_: Exit[Any, Any]) -> Effect[None, Never, Never]:
+        return exit_of(upcoming_scope()).flat_map(lambda ex: sync(lambda: seen.append(ex)))
+
+    @gen
+    def body():
+        scope = yield from upcoming_scope()
+        yield from add_finalizer_exit(scope, record)
+
+    await run(upcoming("scoped")(body()))
+    assert len(seen) == 1
+    ex = seen[0]
+    assert isinstance(ex, Failure)
+    (reason,) = ex.cause.reasons
+    assert isinstance(reason, Die) and isinstance(reason.defect, MissingService)
