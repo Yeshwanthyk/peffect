@@ -1,0 +1,60 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+body{font-family:var(--font-sans);margin:0}
+h2{font-size:15px;margin:18px 0 8px}
+.flow{display:flex;flex-direction:column;gap:6px}
+.step{display:grid;grid-template-columns:1.3fr 1fr 1fr;gap:8px;align-items:center;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--card)}
+.step code{font-family:var(--font-mono);font-size:12px}
+.lbl{font-size:11px;color:var(--muted-foreground);text-transform:uppercase;letter-spacing:.04em}
+.e{color:var(--destructive)}.r{color:var(--info)}.ok{color:var(--success)}
+.arrow{font-size:11px;color:var(--muted-foreground);padding-left:14px}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--border);vertical-align:top}
+th{font-size:11px;color:var(--muted-foreground);text-transform:uppercase;letter-spacing:.04em;font-weight:600}
+td code{font-family:var(--font-mono);font-size:11.5px}
+.b{display:inline-block;padding:1px 7px;border-radius:999px;font-size:11px;white-space:nowrap}
+.built{background:color-mix(in srgb,var(--success) 18%,transparent);color:var(--success)}
+.design{background:color-mix(in srgb,var(--warning) 18%,transparent);color:var(--warning)}
+.layers{display:flex;gap:10px;align-items:stretch;flex-wrap:wrap}
+.L{flex:1;min-width:150px;border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;background:var(--card);font-size:12px}
+.L b{font-family:var(--font-mono);font-size:12.5px}
+.L .t{color:var(--muted-foreground);margin-top:4px}
+</style></head><body>
+
+<h2>1 · How the types flow (real pyright output from examples/app.py)</h2>
+<div class="flow">
+ <div class="step"><div><span class="lbl">@gen def signup(payload)</span><br><code>yield from decode(...) · Users() · Config() · users.create()</code></div><div><span class="lbl">E</span><br><code class="e">DecodeError | EmailTaken</code></div><div><span class="lbl">R</span><br><code class="r">Config | Users</code></div></div>
+ <div class="arrow">↓ .pipe(catch_tag(EmailTaken, …)).pipe(catch_tag(DecodeError, …))</div>
+ <div class="step"><div><span class="lbl">signup_handler(payload)</span></div><div><code class="ok">Never</code></div><div><code class="r">Config | Users</code></div></div>
+ <div class="arrow">↓ .pipe(provide(AppLive))   AppLive: Layer[Users | Db | Config, ConfigError, Never]</div>
+ <div class="step"><div><span class="lbl">after provide</span></div><div><code class="e">ConfigError</code> <span class="lbl">(from layer build)</span></div><div><code class="ok">Never</code></div></div>
+ <div class="arrow">↓ .pipe(catch_tag(ConfigError, …))</div>
+ <div class="step"><div><span class="lbl">main → await pfx.run(main)</span><br><code>run() only accepts Effect[A, Never, Never]</code></div><div><code class="ok">Never</code></div><div><code class="ok">Never</code></div></div>
+</div>
+
+<h2>2 · Layer graph (AppLive = UsersLive.provide_merge(DbLive).merge(ConfigLive))</h2>
+<div class="layers">
+ <div class="L"><b>DbLive</b><div>Db.scoped(open_conn)</div><div class="t">Layer[Db, Never, Never]<br>asynccontextmanager; closed when run() ends</div></div>
+ <div class="L"><b>UsersLive</b><div>Users.effect(make_users())</div><div class="t">Layer[Users, Never, <span class="r">Db</span>]<br>make_users does <code>yield from Db()</code></div></div>
+ <div class="L"><b>ConfigLive</b><div>Config.from_env(AppSettings)</div><div class="t">Layer[Config, <span class="e">ConfigError</span>, Never]<br>pydantic-settings, read at build</div></div>
+</div>
+
+<h2>3 · Effect-TS piece → Python + pydantic</h2>
+<table>
+<tr><th>Effect-TS</th><th>Python shape</th><th>Status</th></tr>
+<tr><td><code>Effect&lt;A, E, R&gt;</code></td><td><code>Effect[A, E, R]</code>, all covariant, explicit TypeVars (mypy needs them)</td><td><span class="b built">built · checked</span></td></tr>
+<tr><td><code>Effect.gen / yield*</code></td><td><code>@gen</code> + <code>yield from</code> on sync generators; runtime drives async</td><td><span class="b built">built · checked</span></td></tr>
+<tr><td><code>Data.TaggedError</code></td><td><code>TaggedError</code> = frozen BaseModel, <code>_tag</code> on JSON</td><td><span class="b built">built · checked</span></td></tr>
+<tr><td><code>catchTag</code></td><td><code>catch_tag(Cls, fn)</code>, overloads: exact match first, then <code>X | Rest</code></td><td><span class="b built">built · checked</span></td></tr>
+<tr><td><code>Context.Tag</code></td><td><code>class Users(Tag[UserRepo])</code>: nominal key + Protocol shape</td><td><span class="b built">built · checked</span></td></tr>
+<tr><td><code>Layer.succeed/effect/scoped</code></td><td><code>Users.succeed(impl)</code>, <code>.effect(eff)</code>, <code>.scoped(cm)</code></td><td><span class="b built">built · checked</span></td></tr>
+<tr><td><code>Layer.merge/provide/provideMerge</code></td><td>same names; <code>ROut</code> invariant; memoized per run</td><td><span class="b built">built · checked</span></td></tr>
+<tr><td><code>Scope / acquireRelease</code></td><td><code>Scope</code> over <code>AsyncExitStack</code>, reverse-order release</td><td><span class="b built">built · tested</span></td></tr>
+<tr><td><code>Schema</code></td><td>pydantic itself: <code>decode(Model, data)</code> → <code>DecodeError</code></td><td><span class="b built">built · tested</span></td></tr>
+<tr><td><code>Config</code></td><td><code>SettingsTag[AppSettings].from_env(...)</code></td><td><span class="b built">built · checked</span></td></tr>
+<tr><td><code>ManagedRuntime</code></td><td>build AppLive once in FastAPI lifespan; per-request <code>run</code> with that context</td><td><span class="b design">design only</span></td></tr>
+<tr><td><code>Effect.all / fork / interrupt</code></td><td><code>asyncio.TaskGroup</code>; interrupt = cancellation; <code>all(*effs)</code> unions E and R</td><td><span class="b design">design only</span></td></tr>
+<tr><td><code>Schedule / retry</code></td><td><code>retry(policy)</code> combinator; policy = pydantic model</td><td><span class="b design">design only</span></td></tr>
+<tr><td><code>withSpan / Logger / Metric</code></td><td>OpenTelemetry span combinator; logger as a Tag</td><td><span class="b design">design only</span></td></tr>
+<tr><td>HTTP edge</td><td>FastAPI adapter: <code>E</code> union → discriminated-union error responses</td><td><span class="b design">design only</span></td></tr>
+</table>
+</body></html>

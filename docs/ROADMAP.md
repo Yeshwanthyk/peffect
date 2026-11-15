@@ -1,0 +1,67 @@
+# Roadmap: from the kernel to the Effect v4 surface
+
+The rule Effect v4 follows, and this port keeps: only the kernel knows about fibers. In v4,
+`internal/core.ts` (768 lines) and `internal/effect.ts` (7,081 lines) hold the run loop, `Scope`
+and the Clock/Reference plumbing. Everything else (`Deferred`, `Queue`, `Layer`, `Schedule`, `Stream`)
+imports the public Effect API plus at most `core.withFiber`. peffect has the same split:
+`core.py`, `fiber.py` and `cause.py` are the kernel, and each piece below is written in peffect
+itself.
+
+Enforced, not hoped for: `scripts/check_boundaries.py` fails when code outside the kernel imports a
+kernel-internal name, reaches through the `peffect` module, or touches a `Fiber` member other than
+`context`, `await_`, `join` and `interrupt` (rules B1–B3 in `docs/INVARIANTS.md`). `WithFiber` is
+the one escape hatch.
+
+## Tiers
+
+| tier | piece | v4 source (lines) | peffect module | built from | proof beyond unit tests |
+|---|---|---|---|---|---|
+| 0 ✓ | kernel: Effect, Exit, Cause, Fiber, fork, masks, gen | internal/core.ts, effect.ts | `core`, `fiber`, `cause` | — | K1–K10 props + `verify-formal-kernel` |
+| 1 ✓ | verify skill + agent guide skeleton, boundary lint | — | `.claude/skills/verify-peffect/`, `AGENTS.md`, `scripts/check_boundaries.py` | — | the skill drives `examples/quickstart.py` end to end; boundary probes red/green |
+| 2 | Context, Tag, Reference, `provide` | Context.ts (1,397), References.ts | `context.py` | `WithFiber` + restore frame | R-typing typetests: a missing service is a type error |
+| 2 | Clock as a Reference, TestClock | Clock.ts (333) | `clock.py`, `testing.py` | Reference + `Async` | `sleep` under TestClock never touches the loop timer |
+| 2 | Scope | Scope.ts (573) | `scope.py` | finalizers run masked, reverse order, get the Exit | prop: every added finalizer runs once, in reverse |
+| 3 | Deferred, Latch | Deferred.ts (946), Latch.ts (394) | `deferred.py` | waiter list + `Async` | formal: waiter-list model (no lost wakeup, interrupted waiter leaves the list) |
+| 3 | Ref, SynchronizedRef | Ref.ts (765) | `ref.py` | plain cell; Sync | — |
+| 3 | Semaphore | Semaphore.ts (696) | `semaphore.py` | waiter list + `Async` | prop: permits never negative, never above max, under random interrupts |
+| 3 | Queue (bounded, dropping, sliding) | Queue.ts (2,175) | `queue.py` | two waiter lists | prop: no item lost or duplicated when takers are interrupted |
+| 3 | `all_`, `for_each(concurrency=)`, `race`, `timeout`, FiberSet | effect.ts | `concurrent.py` | fork + observers + Semaphore + Clock | prop: losers interrupted and awaited before the result (K8 for combinators) |
+| 4 | Layer, MemoMap, ManagedRuntime | Layer.ts (2,856), ManagedRuntime.ts (474) | `layer.py`, `runtime.py` | Context + Scope + Deferred | a shared layer builds once; release in reverse; typetests on `Layer[ROut, E, RIn]` |
+| 5 | Duration, Schedule, `retry`, `repeat` | Schedule.ts (1,583) | `schedule.py` | Clock + `sleep` | TestClock: recorded delays match the schedule exactly |
+| 6 | TaggedError, Codec over pydantic, Config | Schema.ts (19,389), Config.ts (1,630) | `codec.py`, `config.py` | pydantic `TypeAdapter`; issues from `ValidationError` | round-trip props: `decode(encode(x)) == x` |
+| 7 | Pull, Stream, Sink | Pull.ts (408), Stream.ts (12,299), Channel.ts (9,253) | `stream.py` | Pull = an effect that fails with Done; Queue + Scope | prop: early exit runs every upstream finalizer |
+| 8 | Logger, Tracer spans, Metric | Logger.ts, Tracer.ts, Metric.ts | `observe.py` | References + fiber annotations | spans nest by fiber tree |
+
+Each tier ships a lesson and a diagram in `docs/lessons/`, its rows in `docs/INVARIANTS.md`, and
+an AGENTS.md section with the idiom and the mistakes it prevents.
+
+## Progress
+
+- Tier 0: done.
+- Tier 1 (2026-11-15): accepted after independent Sol 6.1 verification and structure-review; two checker findings corrected and regression-tested (31 tests). `examples/quickstart.py`,
+  `verify-peffect`, `AGENTS.md`, the boundary lint with its probes (B1–B3), and lesson 03.
+  Marked ✓ once the independent review passes.
+
+## Order and why
+
+- Context/Clock/Scope come before concurrency: `timeout` needs Clock (else it is untestable
+  without real time), and FiberSet/Queue shutdown need Scope. In v4 all three live inside
+  `internal/effect.ts`, next to the kernel.
+- Deferred is the base of Layer's MemoMap (`Layer.ts:253-275`), so tier 3 precedes tier 4.
+- Schedule only needs Clock; it waits until tier 5 so retry examples can use real services.
+- Stream needs Queue, Scope and Schedule, so it comes last but one.
+
+## Not ported
+
+- Data modules Python already has: Array, Chunk, HashMap, HashSet, Option (`None`), Equal/Hash
+  (`__eq__`/`__hash__`), Order, Struct, Record.
+- Schema's AST, parser and JSON-schema machinery (≈33k lines): pydantic owns them.
+- Platform packages (http, sql, cluster, workflow, ai, rpc) and STM (`Tx*`). Revisit after tier 7.
+
+## Open decisions (none block tiers 1–5)
+
+| decision | default | blocks |
+|---|---|---|
+| Stream: port Channel, or build Stream on Pull + Queue directly | Pull + Queue; add Channel only if operators need it | tier 7 |
+| Codec: pydantic-only, or an Effect-style transformation layer on top | pydantic + optional effectful step | tier 6 |
+| Runtimes other than asyncio (trio via anyio) | asyncio only | none yet |

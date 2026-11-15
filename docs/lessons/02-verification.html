@@ -1,0 +1,55 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+body{font-family:var(--font-sans);margin:0}
+h3{margin:14px 0 6px;font-size:15px}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.lane{border:1px solid var(--border);border-radius:var(--radius);padding:12px}
+.lane h4{margin:0 0 8px;font-size:13px}
+ol{margin:0;padding-left:20px;font-size:12.5px;line-height:1.55}
+li.bad{color:var(--destructive)} li.good{color:var(--success)}
+code{font-family:var(--font-mono);font-size:11.5px;background:var(--code-background);padding:0 3px;border-radius:3px}
+table{border-collapse:collapse;width:100%;font-size:12px;margin-top:4px}
+th,td{border:1px solid var(--border);padding:4px 6px;text-align:center}
+th:first-child,td:first-child{text-align:left}
+td.r{background:var(--destructive-surface);color:var(--destructive);font-weight:600}
+td.k{color:var(--muted-foreground)}
+.layers{display:flex;gap:8px;font-size:12px}
+.layers div{flex:1;border:1px solid var(--border);border-radius:var(--radius);padding:8px}
+.layers b{display:block;margin-bottom:3px}
+</style></head><body>
+<h3>The bug Hypothesis found (K7: interrupts land)</h3>
+<div class="cols">
+<div class="lane"><h4>Before: wait outside the run loop</h4><ol>
+<li>P forks C, then P's body finishes: <code>_done(Success)</code></li>
+<li>C still live → interrupt C, register observer, <b>run loop exits</b></li>
+<li>Someone calls <code>P.interrupt_unsafe()</code></li>
+<li>P isn't running or parked → <code>_deferred = True</code>… nobody ever reads it</li>
+<li class="bad">C publishes → observer publishes P as <b>Success</b>. Interrupt lost.</li>
+</ol></div>
+<div class="lane"><h4>After: wait is an Async inside the loop (like v4)</h4><ol>
+<li>P's body finishes: <code>_done</code> stores it in <code>_ending</code></li>
+<li>Interrupt C, evaluate <code>_await_all</code>: P <b>parks</b></li>
+<li>The interrupt arrives: P is parked and interruptible → woken with Failure</li>
+<li><code>_done(interrupt)</code> merges into <code>_ending</code>; C still live → park again</li>
+<li class="good">C publishes → P resumes → publishes <b>Failure(Interrupt)</b></li>
+</ol></div></div>
+
+<h3>Three layers of proof, each seen red</h3>
+<div class="layers">
+<div><b>Example tests</b>24 tests incl. the regression replay. Fast and specific.</div>
+<div><b>Hypothesis</b>random effect trees on the real kernel, interrupted at any tick; oracle = independent interpreter. 31% land mid-run.</div>
+<div><b>TLA+ / TLC</b>every interleaving of P, C, async completions, an interrupter. 670 states, ~1.5s.</div>
+</div>
+
+<h3>Breaks × rules (red = the check caught it)</h3>
+<table><tr><th>break (mirrors a code change)</th><th>K1</th><th>K2</th><th>K3</th><th>K4</th><th>K6</th><th>K7</th><th>K8</th><th>K9</th><th>stuck</th><th>caught by</th></tr>
+<tr><td>old <code>_done</code></td><td></td><td></td><td></td><td></td><td></td><td class="r">✗</td><td></td><td></td><td></td><td class="k">TLA+, Hypothesis, example</td></tr>
+<tr><td>wake ignores <code>interruptible</code></td><td></td><td></td><td></td><td></td><td class="r">✗</td><td></td><td></td><td></td><td></td><td class="k">TLA+, Hypothesis</td></tr>
+<tr><td>resume ignores <code>park.done</code></td><td class="r">✗</td><td class="r">✗</td><td class="r">✗</td><td></td><td></td><td class="r">✗</td><td></td><td></td><td></td><td class="k">TLA+</td></tr>
+<tr><td>no loop-top delivery</td><td></td><td></td><td></td><td></td><td></td><td class="r">✗</td><td></td><td></td><td></td><td class="k">TLA+</td></tr>
+<tr><td>publish without waiting kids</td><td></td><td></td><td></td><td></td><td></td><td></td><td class="r">✗</td><td></td><td></td><td class="k">TLA+</td></tr>
+<tr><td>kid never notifies parent</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td class="r">✗</td><td class="k">TLA+</td></tr>
+<tr><td>finalizers not masked</td><td></td><td></td><td></td><td class="r">✗</td><td></td><td></td><td></td><td></td><td></td><td class="k">Hypothesis</td></tr>
+<tr><td>handlers run during interrupt</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td class="r">✗</td><td></td><td class="k">Hypothesis</td></tr>
+<tr><td>unwind drops the interrupt</td><td></td><td></td><td></td><td></td><td></td><td class="r">✗</td><td></td><td></td><td></td><td class="k">Hypothesis (pinned example)</td></tr>
+</table>
+</body></html>

@@ -1,0 +1,60 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+:root{color-scheme:light dark}
+.wrap{font-family:var(--font-sans);display:grid;gap:12px}
+.code{font-family:var(--font-mono);font-size:12px;background:var(--code-background);border-radius:var(--radius);padding:10px 12px;white-space:pre;color:var(--foreground)}
+.row{display:grid;grid-template-columns:200px 1fr;gap:14px;align-items:start}
+.stackcol{display:flex;flex-direction:column-reverse;gap:4px;min-height:190px;justify-content:flex-start;border:1px solid var(--border);border-radius:var(--radius);padding:8px}
+.lbl{font-size:11px;color:var(--muted-foreground);text-transform:uppercase;letter-spacing:.05em}
+.f{font-family:var(--font-mono);font-size:12px;padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--card)}
+.f.h{border-color:var(--chart-1)} .f.fin{border-color:var(--chart-2)} .f.r{border-color:var(--chart-4)}
+.f.pop{opacity:.35;text-decoration:line-through}
+.f.hot{outline:2px solid var(--ring)}
+.state{display:flex;gap:8px;flex-wrap:wrap}
+.pill{font-family:var(--font-mono);font-size:12px;padding:3px 8px;border-radius:999px;border:1px solid var(--border)}
+.pill.on{background:var(--warning-surface);border-color:var(--warning)}
+.pill.ok{background:var(--accent-surface)}
+.cur{font-family:var(--font-mono);font-size:13px;padding:8px 10px;border-radius:var(--radius);background:var(--secondary)}
+.txt{font-size:14px;line-height:1.5}
+.nav{display:flex;gap:8px;align-items:center}
+button{font:inherit;font-size:13px;padding:5px 12px;border-radius:6px;border:1px solid var(--border);background:var(--card);color:var(--foreground);cursor:pointer}
+.dots{display:flex;gap:5px;margin-left:6px}.dot{width:8px;height:8px;border-radius:50%;background:var(--border)}.dot.a{background:var(--primary)}
+.legend{display:flex;gap:14px;font-size:12px;color:var(--muted-foreground)}
+.sw{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:4px;vertical-align:-1px;border:2px solid}
+</style></head><body><div class="wrap">
+<div class="code">child = never.pipe(catch_cause(log "caught"))      # a user handler
+             .pipe(ensuring(log "finalized"))     # a finalizer
+...
+yield from child.interrupt()                      # from the parent fiber</div>
+<div class="legend"><span><span class="sw" style="border-color:var(--chart-1)"></span>handler (on_err)</span><span><span class="sw" style="border-color:var(--chart-2)"></span>finalizer (on_any masks)</span><span><span class="sw" style="border-color:var(--chart-4)"></span>restore frame</span></div>
+<div class="row">
+ <div><div class="lbl">child fiber stack (top ↑)</div><div class="stackcol" id="stack"></div></div>
+ <div style="display:grid;gap:10px">
+  <div><div class="lbl">fiber state</div><div class="state" id="state"></div></div>
+  <div><div class="lbl">run loop is evaluating</div><div class="cur" id="cur"></div></div>
+  <div class="txt" id="txt"></div>
+ </div>
+</div>
+<div class="nav"><button id="prev">← prev</button><button id="next">next →</button><span class="dots" id="dots"></span></div>
+</div><script>
+const S=[
+{stack:[["OnExit · ensuring","fin"],["OnFailure · catch_cause","h"]],st:{interruptible:true,interrupted:null,parked:true},cur:"Async(never) → None (parked)",
+ t:"<b>Build the stack.</b> Evaluating <code>OnExit</code> pushes itself and returns its inner effect; <code>OnFailure</code> does the same. <code>never</code> is an Async that nobody resumes, so the loop returns None and the fiber is <i>parked</i>. No Python call stack is held, only this list."},
+{stack:[["OnExit · ensuring","fin"],["OnFailure · catch_cause","h"]],st:{interruptible:true,interrupted:"Interrupt(parent)",parked:false},cur:"Failure(Interrupt(parent))",
+ t:"<b>Interrupt arrives.</b> <code>interrupt_unsafe</code> records the cause. The fiber is parked and interruptible, so the park is marked dead (a late resume is ignored) and the fiber is woken with <code>Failure(interrupt)</code>."},
+{stack:[["OnExit · ensuring","fin"],["OnFailure · catch_cause","h pop hot"]],st:{interruptible:true,interrupted:"Interrupt(parent)",parked:false},cur:"Failure._eval → skip loop",
+ t:"<b>Skip the handler.</b> Failure pops the next error handler: the user's <code>catch_cause</code>. The fiber is interrupted <i>and</i> interruptible, so the skip loop discards it. A program can't catch its own interruption. (Fails from a skipped handler are dropped: <code>core.ts:601-629</code>.)"},
+{stack:[["RESTORE · SetInterruptible(True)","r"]],st:{interruptible:false,interrupted:"Interrupt(parent)",parked:false},cur:"OnExit.on_err(cause) → finalizer",
+ t:"<b>The finalizer masks itself.</b> Popping <code>OnExit</code> runs its <code>on_any</code> hook, even while skipping: it sets interruptible=False and pushes a RESTORE frame. Now the skip loop condition fails, so it stops here and <code>on_err</code> runs the finalizer. <b>This is the whole trick behind “finalizers always run.”</b>"},
+{stack:[["RESTORE · SetInterruptible(True)","r"]],st:{interruptible:false,interrupted:"Interrupt(parent)",parked:false},cur:"log 'finalized' → re-emit Failure(cause)",
+ t:"<b>Finalizer runs, uninterruptibly.</b> If another interrupt arrived now it would only set the deferred flag. Once the finalizer is done, the original exit is re-emitted. If the finalizer had failed, its cause would be <i>added</i> (<code>cause + c2</code>)."},
+{stack:[["RESTORE · SetInterruptible(True)","r pop hot"]],st:{interruptible:true,interrupted:"Interrupt(parent)",parked:false},cur:"fiber._done(Failure(Interrupt))",
+ t:"<b>Unmask and finish.</b> RESTORE's on_any sets interruptible=True and re-delivers the pending interrupt. The stack is now empty, so <code>_done</code> interrupts any children, waits for them, then publishes the Exit. The parent's <code>interrupt()</code> was waiting on that publish, so it resumes only after cleanup. Log: <code>[\"finalized\"]</code>, with no “caught”."}
+];
+let i=0;const $=id=>document.getElementById(id);
+function draw(){const s=S[i];
+ $("stack").innerHTML=s.stack.length?s.stack.map(([n,c])=>`<div class="f ${c}">${n}</div>`).join(""):'<div class="lbl">empty</div>';
+ $("state").innerHTML=`<span class="pill ${s.st.interruptible?'ok':'on'}">interruptible=${s.st.interruptible}</span><span class="pill ${s.st.interrupted?'on':''}">interrupted=${s.st.interrupted??'None'}</span><span class="pill">${s.st.parked?'parked':'running'}</span>`;
+ $("cur").textContent=s.cur;$("txt").innerHTML=`<span class="lbl">step ${i+1}/${S.length}</span><br>`+s.t;
+ $("dots").innerHTML=S.map((_,j)=>`<span class="dot ${j===i?'a':''}"></span>`).join("");}
+$("prev").onclick=()=>{i=(i+S.length-1)%S.length;draw()};$("next").onclick=()=>{i=(i+1)%S.length;draw()};draw();
+</script></body></html>

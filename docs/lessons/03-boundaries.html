@@ -1,0 +1,51 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+:root{color-scheme:light dark}
+body{font-family:var(--font-sans);margin:0}
+.wrap{display:grid;gap:12px}
+h3{margin:4px 0;font-size:15px}
+.txt{font-size:13.5px;line-height:1.5}
+.map{display:grid;grid-template-columns:1fr 150px 1.25fr;gap:10px;align-items:stretch}
+.box{border:1px solid var(--border);border-radius:var(--radius);padding:10px}
+.box h4{margin:0 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted-foreground)}
+.kernel{border-color:var(--chart-1)}
+.f{font-family:var(--font-mono);font-size:12px;padding:4px 7px;border-radius:6px;border:1px solid var(--border);background:var(--card);margin:3px 0}
+.pub{border-color:var(--success)} .int{border-color:var(--destructive);opacity:.85}
+.arrows{display:flex;flex-direction:column;justify-content:center;gap:8px;font-size:12px}
+.ok{color:var(--success)} .no{color:var(--destructive)}
+code{font-family:var(--font-mono);font-size:11.5px;background:var(--code-background);padding:0 3px;border-radius:3px}
+table{border-collapse:collapse;width:100%;font-size:12px}
+th,td{border:1px solid var(--border);padding:4px 6px;text-align:left;vertical-align:top}
+td.r{color:var(--destructive)} td.g{color:var(--success)}
+</style></head><body><div class="wrap">
+<h3>Lesson 3: only the kernel knows about fibers</h3>
+<div class="txt">Effect v4 keeps its run loop in two files, and <code>Queue</code>, <code>Layer</code> and <code>Stream</code> are built from the public API plus <code>withFiber</code>. peffect does the same, and a lint makes it a rule rather than a habit. The catch in Python: many kernel internals have no underscore (<code>Async</code>, <code>Frame</code>, <code>fiber.stack</code>), so pyright's private-name check can't see them.</div>
+<div class="map">
+ <div class="box"><h4>outside: examples/, future context.py, queue.py…</h4>
+  <div class="f">from peffect import gen, fork</div>
+  <div class="f">from .core import Effect, succeed</div>
+  <div class="f">WithFiber(lambda fiber: …)</div>
+ </div>
+ <div class="arrows">
+  <div class="ok">✓ public names, from <code>peffect</code> or their defining module</div>
+  <div class="ok">✓ <code>fiber.context</code>, <code>await_</code>, <code>join</code>, <code>interrupt</code></div>
+  <div class="no">✗ nodes, frames, run-loop state</div>
+ </div>
+ <div class="box kernel"><h4>kernel: core.py · fiber.py · cause.py</h4>
+  <div class="f pub">public: Effect, Exit, Cause, Fiber, gen, fork, run, …</div>
+  <div class="f pub">escape hatch: WithFiber</div>
+  <div class="f int">nodes: Async, Sync, Suspend, OnSuccess, OnExit, GenFrame</div>
+  <div class="f int">frames: Frame, Then, SetInterruptible, Park</div>
+  <div class="f int">Fiber state: stack, running, interrupted, interruptible, children, _deferred</div>
+  <div class="f int">unsafe: interrupt_unsafe, take_interrupt, add_observer, _start</div>
+ </div>
+</div>
+<table>
+<tr><th>rule</th><th>rejected</th><th>accepted</th></tr>
+<tr><td>B1 imports</td><td class="r"><code>from peffect.core import Async</code><br><code>from . import fiber</code><br><code>import peffect.core</code></td><td class="g"><code>from peffect.core import Effect</code> (core defines it)<br><code>from .fiber import Fiber</code><br><code>from peffect.core import WithFiber</code></td></tr>
+<tr><td>B2 module reach</td><td class="r"><code>pe.core.Async</code>, <code>pe._start</code></td><td class="g"><code>pe.succeed(1)</code></td></tr>
+<tr><td>B3 Fiber members</td><td class="r"><code>WithFiber(lambda f: f.stack)</code><br><code>def g(f: Fiber[Any, Any]): f.running</code><br><code>getattr(f, "stack")</code></td><td class="g"><code>WithFiber(lambda f: succeed(f.context))</code><br><code>def unrelated(fiber): fiber.stack</code> (not a Fiber)</td></tr>
+</table>
+<div class="txt"><b>Why the allowed list is written down, not inferred.</b> "Fiber methods that return an Effect" would also admit a future unsafe one. The four members are a specification; adding one is a design decision recorded in <code>docs/INVARIANTS.md</code>.<br>
+<b>Where it stops.</b> The lint follows names, not values: a Fiber passed to an unannotated helper or stored in a list is invisible to it. Pyright strict forces annotations in <code>src/</code>, which closes most of that gap. A callback it can't inspect (<code>WithFiber(obj.method)</code>) fails the lint instead of passing silently.<br>
+<b>How we know it bites.</b> <code>tests/test_boundaries.py</code> marks each forbidden line <code># expect: B1</code> and requires exactly those reports; disabling any one check in the lint turns it red.</div>
+</div></body></html>

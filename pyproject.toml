@@ -1,0 +1,50 @@
+[project]
+name = "peffect"
+version = "0.0.1"
+requires-python = ">=3.13"
+dependencies = ["pydantic[email]>=2.9", "pydantic-settings>=2.6"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.8",
+    "pyright>=1.1.390",
+    "mypy>=2.4.1",
+    "hypothesis>=6.170.15",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+extend-exclude = ["vendor", "prototypes", ".claude/skills/*/tlc_chart.py"]  # tlc_chart.py: pinned copy of the invariants skill tool
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "RUF", "ANN"]
+ignore = ["ANN401"]
+[tool.ruff.lint.per-file-ignores]
+# @gen bodies stay unannotated so pyright infers Effect[A, E, R].
+"examples/*" = ["ANN201", "ANN202"]
+"tests/*" = ["ANN201", "ANN202"]
+"typetests/*" = ["ANN201", "ANN202"]
+# Effect/Exit/Cause need explicit covariant TypeVars: mypy doesn't infer PEP 695 variance.
+"src/peffect/core.py" = ["UP046"]
+"src/peffect/cause.py" = ["UP046"]
+"src/peffect/fiber.py" = ["UP046"]
+
+[tool.pyright]
+include = ["src", "tests", "scripts", "examples", "typetests/should_pass.py", "typetests/declared.py"]
+exclude = ["vendor"]
+typeCheckingMode = "strict"
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.13"
+reportUnknownParameterType = false  # unannotated @gen bodies: send type is Unknown (pyright#10279)
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
