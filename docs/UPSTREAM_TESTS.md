@@ -92,7 +92,7 @@ into zero before `sleepMillis` sees it; `sleepMillis` alone would send NaN to `n
 | prerequisites | `tests/test_fiber_start_upstream.py` | `Effect.test.ts` :2987 :3013 :3160 :3169, `Fiber.test.ts` :137 :225; source-derived cases (labelled) for forkUnsafe :5614-5637, forkDetach :5728, exit :3873-3889, exitFailCause core.ts:611-624 | — | green: `fork`/`fork_daemon(start_immediately=)`, `exit_` |
 | D: TestClock | `tests/test_testclock.py` | `TestClock.test.ts` sleep, setTime and adjust groups | C, prerequisites | drafted; red only on missing `peffect.testing` (16) |
 | E: Scope, sequential | `tests/test_scope.py` | `Scope.test.ts` sequential variants: interrupted close, direct close after interrupt, masked `closeUnsafe`, throw-then-continue, sole throwing finalizer keeps the failure, the 4 fork tests | A, B, prerequisites | green (20, with the Scope.ts doc examples and source-derived cases). Parallel close with several finalizers raises NotImplementedError until G; `Scope.use` (scopeUse) not ported, deferred to F |
-| F: Scope with effects | `tests/test_scope_effects.py` | `Effect.test.ts` scoped `:86`, acquireRelease `:1389` `:1407`, scoped failures `:3271`, forkIn `:3038-3071`, forkScoped `:3083-3116`, updateServiceScoped `:5334` `:5345` `:5359`, acquireUseRelease `:322` `:349` `:377` `:2578` `:2598` | E | planned |
+| F: remaining Scope effects | `tests/test_scope_effects.py` | `Effect.test.ts` scoped `:86`, forkIn `:3038-3071`, forkScoped `:3083-3116`, updateServiceScoped `:5334` `:5345` `:5359` | E | planned |
 | G: parallel Scope | `tests/test_scope_parallel.py` | `Scope.test.ts` parallel variants (4), `Effect.test.ts:3073`, TestClock "handles multiple sleeps" (needs `forkScoped`) | D, E, F | deferred to tier 3 (D2) |
 
 Decisions already made for these batches:
@@ -125,3 +125,31 @@ Clock, matching Duration.make's position before the service boundary. The record
 failed before this correction and passes after it. Sol's other Clock probes passed. Parent reran
 78 tests excluding the still-unimplemented TestClock draft, plus ruff and pyright successfully.
 This does not establish full Duration input parity.
+
+
+## Resource unit — `tests/test_resources_upstream.py`
+
+Implementation `resources.py`, pinned `internal/effect.ts`: acquireRelease :4240-4256,
+addFinalizer :4259-4269, acquireUseRelease :4502-4515. All 22 cases pass locally; independent
+review and integration remain pending.
+
+| Effect.test.ts | Ported behavior |
+|---|---|
+| :1389, :1407 | acquireRelease interruption and release dependencies |
+| :322, :349, :377 | acquireUseRelease interruption, thrown use, uninterruptible execution |
+| :2578, :2598 | inherited interrupt status and interrupted-use release |
+| :3271, :3283 | scoped failure aggregation and usage result |
+| :3292, :3305, :3318 | acquisition, release and use error Exits |
+| :3331 | combined usage/release failures |
+| :3344, :3354, :3367 | rethrown acquisition, release and use errors |
+
+Six labelled source-derived cases: Context capture and closing Exit for acquireRelease and
+addFinalizer (:4240-4269); no use/release after acquisition failure or defect for both
+acquisition APIs (:4246-4254, :4509-4514). Repeated single-stage cases share parameterized
+setup, retaining each upstream scenario id and assertion. Original 100 ms and 10 ms delays
+are preserved. Interrupt-only Exits compare exact causes; the unported flip is checked as a
+failure with the original error identity. Exception/Exit adaptations follow batch B.
+
+Not covered: optional interruptible acquisition; the Scheduler-specific scoped installation
+interruption (:85); tryPromise/AbortController (:566); unrelated AiError finalizers (:4892,
+:4983). These remain incomplete, with no simulated replacements.

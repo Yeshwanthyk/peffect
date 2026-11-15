@@ -84,9 +84,9 @@ class Effect(Generic[A_co, E_co, R_co]):
     ) -> Effect[A_co | B, E2, R_co | R2]:
         return OnFailure(self, handler)
 
-    def on_exit[R2 = Never](
-        self, f: Callable[[Exit[A_co, E_co]], Effect[Any, Never, R2]]
-    ) -> Effect[A_co, E_co, R_co | R2]:
+    def on_exit[E2 = Never, R2 = Never](
+        self, f: Callable[[Exit[A_co, E_co]], Effect[Any, E2, R2]]
+    ) -> Effect[A_co, E_co | E2, R_co | R2]:
         return OnExit(self, f)
 
     def ensuring[R2 = Never](
@@ -751,15 +751,15 @@ class catch_tag[X, B, E2, R2]:
 
 
 @final
-class on_exit[R2]:
+class on_exit[R2 = Never, E2 = Never]:
     """Run ``f(exit)`` after the effect however it ends (success, failure, interrupt), masked."""
 
     __slots__ = ("f",)
 
-    def __init__(self, f: Callable[[Exit[Any, Any]], Effect[Any, Never, R2]]) -> None:
+    def __init__(self, f: Callable[[Exit[Any, Any]], Effect[Any, E2, R2]]) -> None:
         self.f = f
 
-    def __call__[A, E, R](self, eff: Effect[A, E, R]) -> Effect[A, E, R | R2]:
+    def __call__[A, E, R](self, eff: Effect[A, E, R]) -> Effect[A, E | E2, R | R2]:
         return OnExit(eff, self.f)
 
 

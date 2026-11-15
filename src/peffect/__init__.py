@@ -44,6 +44,7 @@ from peffect.core import (
     yield_now,
 )
 from peffect.fiber import Fiber, fork, fork_daemon, run, run_exit
+from peffect.resources import acquire_release, acquire_use_release, add_finalizer
 from peffect.scope import Closeable, Scope, ScopeService, scope, scoped
 
 __all__ = [
@@ -70,6 +71,9 @@ __all__ = [
     "ScopeService",
     "Success",
     "Tag",
+    "acquire_release",
+    "acquire_use_release",
+    "add_finalizer",
     "async_",
     "attempt",
     "catch_all",

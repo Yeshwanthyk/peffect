@@ -12,10 +12,14 @@ from peffect import (
     ScopeService,
     Success,
     Tag,
+    acquire_release,
+    acquire_use_release,
+    add_finalizer,
     catch_tag,
     fail,
     gen,
     provide,
+    scoped,
     succeed,
 )
 
@@ -155,3 +159,46 @@ def finalizer_requires(service: ScopeService) -> None:
 def strategy_replaced(service: ScopeService) -> None:
     # 22. STRATEGY_REPLACED: strategy is read-only
     service.strategy = "parallel"
+
+
+async def resource_without_scope() -> None:
+    # 23. RESOURCE_SCOPE_MISSING: only Scope remains after supplying the release dependency
+    await peffect.run(provide(Log.context("log"))(
+        acquire_release(succeed(1), lambda _a, _ex: Log().use())
+    ))
+
+
+async def resource_without_release_dependency() -> None:
+    # 24. RESOURCE_RELEASE_DEPENDENCY_MISSING: scoped removes Scope, not the release's Log
+    await peffect.run(scoped(acquire_release(succeed(1), lambda _a, _ex: Log().use())))
+
+
+async def finalizer_without_scope() -> None:
+    # 25. FINALIZER_SCOPE_MISSING: supplying Log leaves Scope outstanding
+    await peffect.run(provide(Log.context("log"))(
+        add_finalizer(lambda _ex: Log().use().as_(None))
+    ))
+
+
+async def finalizer_without_dependency() -> None:
+    # 26. FINALIZER_DEPENDENCY_MISSING: registration requires its finalizer's services
+    await peffect.run(scoped(add_finalizer(lambda _ex: Log().use().as_(None))))
+
+
+# 27. RELEASE_ERROR_LOST: acquire_use_release includes the release's error channel
+_release_lost: Effect[int, Never, Never] = acquire_use_release(
+    succeed(1), lambda a: succeed(a), lambda _a, _ex: fail(Other())
+)
+
+
+async def use_release_without_dependency() -> None:
+    # 28. USE_RELEASE_DEPENDENCY_MISSING: release services are required without a Scope
+    await peffect.run(acquire_use_release(
+        succeed(1), lambda a: succeed(a), lambda _a, _ex: Log().use().as_(None)
+    ))
+
+
+# 29. RESOURCE_VALUE_LOST: acquire_release keeps the acquired value type
+_wrong_resource: Effect[str, Never, Scope] = acquire_release(
+    succeed(1), lambda _a, _ex: succeed(None)
+)

@@ -3,9 +3,6 @@ ported from Effect.test.ts. Upstream is pinned at vendor/effect-v4 commit 289a53
 Upstream implementation: internal/effect.ts acquireRelease :4240-4256, addFinalizer :4259-4269,
 acquireUseRelease :4502-4515.
 
-The three functions are not in peffect yet. Each test looks them up on the package when it runs,
-so all tests collect. A missing API raises AttributeError (captured as a Die inside @gen).
-
 Adaptations used throughout:
 - `Effect.delay(eff, ms)` is `sleep(ms / 1000)` and then `eff`: real time, as upstream's
   `it.live` (:1389, :2578) and ordinary `it` (:322, :377). Durations are unchanged.
@@ -34,11 +31,10 @@ Deferred, not ported here:
 """
 
 from collections.abc import Callable
-from typing import Any, Never, cast
+from typing import Any, Never
 
 import pytest
 
-import peffect
 from peffect import (
     Cause,
     Effect,
@@ -49,6 +45,9 @@ from peffect import (
     Scope,
     Success,
     Tag,
+    acquire_release,
+    acquire_use_release,
+    add_finalizer,
     die,
     exit_,
     fail,
@@ -67,25 +66,6 @@ from peffect import (
 
 type AnyEffect = Effect[Any, Any, Any]
 type Release = Callable[[Any, Exit[Any, Any]], AnyEffect]
-
-
-def _upcoming(name: str) -> Callable[..., AnyEffect]:
-    """The peffect function `name`, read when the test runs (AttributeError until it exists)."""
-    return cast(Callable[..., AnyEffect], getattr(peffect, name))
-
-
-def acquire_release(acquire: AnyEffect, release: Release) -> AnyEffect:
-    return _upcoming("acquire_release")(acquire, release)
-
-
-def acquire_use_release(
-    acquire: AnyEffect, use: Callable[[Any], AnyEffect], release: Release
-) -> AnyEffect:
-    return _upcoming("acquire_use_release")(acquire, use, release)
-
-
-def add_finalizer(finalizer: Callable[[Exit[Any, Any]], AnyEffect]) -> AnyEffect:
-    return _upcoming("add_finalizer")(finalizer)
 
 
 class Boom(Exception):

@@ -165,6 +165,23 @@ does not import it. Upstream: `internal/effect.ts:6395-6486`.
 **Not in the formal model.** `verify-formal-kernel` does not model Scope. It changes no kernel
 node: it only composes public combinators the kernel already has.
 
+## Resources
+
+`resources.py` composes Scope and public kernel APIs. Pinned upstream `internal/effect.ts`
+:4240-4269 and :4502-4515; tests in `tests/test_resources_upstream.py`.
+
+| # | Invariant | Enforced by | Pinned by |
+|---|---|---|---|
+| R1 | **Acquisition stays masked through cleanup registration.** Failure or defect in acquisition registers nothing. | `uninterruptible` around lookup, acquire and Scope registration | `test_acquire_release_releases_on_interrupt`, `test_source_acquisition_failure_never_uses_or_releases` |
+| R2 | **Scoped release/finalizer services are captured at acquisition/registration.** Captured services override close-time services, with the closing Exit passed through. | read-only `WithFiber` context capture, `update_context` merge | `test_acquire_release_supports_release_dependencies`, `test_source_finalizer_captures_registration_context_and_close_exit` |
+| R3 | **Use inherits interruptibility; acquisition and release are masked.** A thrown use callback still releases once. | `uninterruptible_mask`, suspended use below `on_exit` | the interrupt, uninterruptible, inherited-status, interrupted-use and thrown-use resource tests |
+| R4 | **Use values and acquisition/use/release errors are preserved.** Combined failures keep upstream cause order and defect election. | existing `on_exit` runtime; generalized error annotations only | single-stage error, combined failures and scoped finalizer failure resource tests; positive and negative typetests |
+| R5 | **Scope and captured release dependencies remain caller requirements.** `scoped` removes only Scope; acquire/use/release also exposes release errors. | resource API signatures | `typetests/should_pass.py`; negative blocks 23-29 |
+
+Only default masked `acquire_release` acquisition is supported; the optional interruptible
+acquisition mode has no API yet. No kernel runtime change, and no new formal-model claim.
+Independent review and integration remain the coordinator's gate.
+
 ## Kernel boundary
 
 Only the kernel (`src/peffect/core.py`, `fiber.py`, `cause.py`, `__init__.py`) knows about fibers

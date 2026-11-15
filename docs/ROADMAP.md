@@ -84,7 +84,13 @@ an AGENTS.md section with the idiom and the mistakes it prevents.
 - Tier 2, Scope, sequential (2026-11-15): `scope.py` (`Scope` tag and module functions,
   `Closeable`, `ScopeService`, `scope`, `scoped`) over public combinators only; batch E green,
   rows S1–S8, typetests. Pending: parallel close (batch G; raises NotImplementedError for now),
-  `Scope.use`, batch F, lesson 06. Unmodeled by the formal kernel.
+  `Scope.use`, remaining batch F, lesson 06. Unmodeled by the formal kernel.
+- Resource unit (2026-11-15): `resources.py` provides default masked `acquire_release`,
+  `acquire_use_release`, and `add_finalizer` over public primitives. All 22 upstream/source-derived
+  cases pass, with resource/error requirement typetests. Independent Sol review, structure review
+  and structural re-search passed; 132 tests pass excluding TestClock. Optional interruptible
+  acquisition and remaining Scope effects are incomplete; no
+  Layer, Deferred or TestClock implementation is included.
 
 ## Order and why
 

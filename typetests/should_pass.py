@@ -15,6 +15,9 @@ from peffect import (
     Scope,
     ScopeService,
     Tag,
+    acquire_release,
+    acquire_use_release,
+    add_finalizer,
     catch_all,
     catch_tag,
     clock_with,
@@ -26,6 +29,7 @@ from peffect import (
     fork_daemon,
     gen,
     on_error,
+    on_exit,
     on_interrupt,
     provide,
     scoped,
@@ -211,3 +215,56 @@ made: ScopeService = Scope.make_unsafe()  # a Closeable is a ScopeService
 assert_type(Scope.add_finalizer_exit(made, lambda ex: ex), Effect[None, Never, Never])
 assert_type(Scope.fork(made), Effect[Closeable, Never, Never])
 assert_type(Scope.provide(made)(current_scope), Effect[ScopeService, Never, Never])
+
+
+# Resources: acquisition returns its value, registration captures release requirements.
+resource = acquire_release(Users().use(), lambda _repo, _ex: Log().use())
+assert_type(resource, Effect[Repo, Never, Users | Log | Scope])
+assert_type(scoped(resource), Effect[Repo, Never, Users | Log])
+assert_type(provide(full)(scoped(resource)), Effect[Repo, Never, Never])
+registered = add_finalizer(lambda _ex: Log().use().as_(None))
+assert_type(registered, Effect[None, Never, Log | Scope])
+assert_type(provide(Log.context(Logger()))(scoped(registered)), Effect[None, Never, Never])
+assert_type(
+    acquire_release(find(1), lambda _name, _ex: succeed(None)),
+    Effect[str, NotFound, Scope],
+)
+
+
+class ReleaseError(Exception): ...
+
+
+def acquire_resource() -> Effect[int, NotFound, Users]:
+    return Users().use().as_(123)
+
+
+def use_resource(resource: int) -> Effect[str, Timeout, Log]:
+    return Log().use().as_(str(resource))
+
+
+def release_resource(resource: int, ex: Exit[str, Timeout]) -> Effect[None, ReleaseError, Db]:
+    return Db().use().as_(None)
+
+
+assert_type(
+    acquire_use_release(acquire_resource(), use_resource, release_resource),
+    Effect[str, NotFound | Timeout | ReleaseError, Users | Log | Db],
+)
+# Pin each empty-channel overload, too: no Unknown may hide a requirement or error.
+assert_type(
+    acquire_use_release(succeed(1), lambda _: succeed("used"), lambda _a, _ex: succeed(None)),
+    Effect[str, Never, Never],
+)
+assert_type(
+    acquire_use_release(find(1), lambda _: slow(), lambda _a, _ex: fail(ReleaseError())),
+    Effect[int, NotFound | Timeout | ReleaseError, Never],
+)
+assert_type(
+    acquire_use_release(Users().use(), lambda _: Log().use(), lambda _a, _ex: Db().use().as_(None)),
+    Effect[Logger, Never, Users | Log | Db],
+)
+# Generalized on_exit exposes a failing finalizer in either public spelling.
+assert_type(find(1).on_exit(lambda _: fail(Timeout())), Effect[str, NotFound | Timeout, Never])
+assert_type(
+    find(1).pipe(on_exit(lambda _: fail(Timeout()))), Effect[str, NotFound | Timeout, Never]
+)
