@@ -11,6 +11,33 @@ Enforced, not hoped for: `scripts/check_boundaries.py` fails when code outside t
 kernel-internal name, reaches through the `peffect` module, or touches a `Fiber` member outside the
 list in rule B3 (rules B1–B3 in `docs/INVARIANTS.md`). `WithFiber` is the one escape hatch.
 
+## Build order: foundations before parallel composition (2026-11-15)
+
+This order supersedes the original tier ordering where dependencies conflict. Build shared
+primitives once against pinned upstream contracts; do not recreate them inside consumers.
+
+1. Finish the runtime base: Effect/Cause/Exit, async suspension, fibers, interruption and
+   finalization, immediate startup, context restoration, and Scheduler dispatch/tracking.
+2. Complete shared service and value contracts: Context identity and equality parity,
+   Reference, precise Duration inputs and Clock behavior.
+3. Build resource and coordination primitives in dependency order: Scope and acquire/release,
+   Ref, Deferred, Latch, Semaphore, then Queue and required concurrent operations. Sequential
+   Scope is an intermediate delivery; parallel finalization remains required work.
+4. Open independent composition lanes only when each lane's prerequisites are verified:
+   Layer/MemoMap/ManagedRuntime; TestClock and its test environment; concurrency operators;
+   Schedule/retry/repeat. Stream and Pydantic integration follow their own dependency gates.
+
+A prerequisite is ready when its upstream tests are ported, source-derived additions are
+labelled, runtime and type checks pass, independent review is resolved, and it is committed.
+Integration tests exercise compositions as they land. Keep one writer for shared kernel and
+exports; give parallel writers disjoint modules. A discovered primitive defect is fixed in its
+owner, with a regression, then dependent lanes reverify. No fixed-yield scheduler substitutes,
+consumer-local substitutes for missing primitives, or silent sequential fallback for parallel.
+
+Current accepted base: immediate startup and Exit capture committed as `eb7a11a`, independently
+reviewed (90 tests pass excluding the two future Scope/TestClock files). This is a verified
+increment, not a claim that the full runtime or its fidelity gaps are complete.
+
 ## Tiers
 
 | tier | piece | v4 source (lines) | peffect module | built from | proof beyond unit tests |
