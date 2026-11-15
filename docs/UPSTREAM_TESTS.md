@@ -17,7 +17,7 @@ Status values:
 | # | Upstream | peffect | Effect on the tests |
 |---|---|---|---|
 | D1 | A service key is a string (`Context.Service("ContextTest/A")`) | The key is the tag class | Order assertions compare classes |
-| D2 | `Scope` strategy `"sequential"` (default) or `"parallel"` | Both, sequential first | Parallel cases are batch G, tier 3. Deferred, not dropped |
+| D2 | `Scope` strategy `"sequential"` (default) or `"parallel"` | Both | Parallel cases are batch G; its Scope.test.ts ports pass |
 | D3 | `Context.makeUnsafe(map)` keeps the caller's map | The map is copied on install | That case is not ported |
 | D4 | Interrupt-at-install forced by a custom `Scheduler.shouldYield` | No scheduler hook: the interrupt is requested inside the `update_context` merge, at the same point | Same scenario and assertion (`observed is original`) |
 | D5 | Duration strings (`"1 minute"`) | Seconds as `float`, as `sleep` takes today | Only cases that need the unported Duration API are deferred (see below) |
@@ -91,9 +91,9 @@ into zero before `sleepMillis` sees it; `sleepMillis` alone would send NaN to `n
 |---|---|---|---|---|
 | prerequisites | `tests/test_fiber_start_upstream.py` | `Effect.test.ts` :2987 :3013 :3160 :3169, `Fiber.test.ts` :137 :225; source-derived cases (labelled) for forkUnsafe :5614-5637, forkDetach :5728, exit :3873-3889, exitFailCause core.ts:611-624 | — | green: `fork`/`fork_daemon(start_immediately=)`, `exit_` |
 | D: TestClock | `tests/test_testclock.py` | `TestClock.test.ts` sleep, setTime and adjust groups | C, prerequisites | drafted; red only on missing `peffect.testing` (16) |
-| E: Scope, sequential | `tests/test_scope.py` | `Scope.test.ts` sequential variants: interrupted close, direct close after interrupt, masked `closeUnsafe`, throw-then-continue, sole throwing finalizer keeps the failure, the 4 fork tests | A, B, prerequisites | green (20, with the Scope.ts doc examples and source-derived cases). Parallel close with several finalizers raises NotImplementedError until G; `Scope.use` (scopeUse) not ported, deferred to F |
+| E: Scope, sequential | `tests/test_scope.py` | `Scope.test.ts` sequential variants: interrupted close, direct close after interrupt, masked `closeUnsafe`, throw-then-continue, sole throwing finalizer keeps the failure, the 4 fork tests | A, B, prerequisites | green (20, with the Scope.ts doc examples and source-derived cases). `Scope.use` (scopeUse) not ported, deferred to F |
 | F: remaining Scope effects | `tests/test_scope_effects.py` | `Effect.test.ts` scoped `:86`, forkIn `:3038-3071`, forkScoped `:3083-3116`, updateServiceScoped `:5334` `:5345` `:5359` | E | planned |
-| G: parallel Scope | `tests/test_scope_parallel.py` | `Scope.test.ts` parallel variants (4), `Effect.test.ts:3073`, TestClock "handles multiple sleeps" (needs `forkScoped`) | D, E, F | deferred to tier 3 (D2) |
+| G: parallel Scope | `tests/test_scope_parallel.py` | `Scope.test.ts` parallel variants (4), `Effect.test.ts:3073`, TestClock "handles multiple sleeps" (needs `forkScoped`) | D, E, F | `Scope.test.ts` :7 (harness adaptation: Deferred gates for TestClock), :22, :39, :124 green; independently verified by Sol 6.1. `Effect.test.ts:3073` and "handles multiple sleeps" wait on F and D. Not reachable yet: upstream skips a finalizer keyed by the closing fiber (`key !== parent`, `internal/effect.ts:4090-4093`); only `forkIn`/`Fiber.runIn` register such a key, so it arrives with F, not as a guard now |
 
 Decisions already made for these batches:
 - **E and F** may use a small test-only latch built on the public `async_`. No fake Scope or Clock behavior.

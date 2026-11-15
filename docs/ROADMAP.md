@@ -83,8 +83,8 @@ an AGENTS.md section with the idiom and the mistakes it prevents.
   tests in `tests/test_fiber_start_upstream.py`; formal model updated (nested immediate drive).
 - Tier 2, Scope, sequential (2026-11-15): `scope.py` (`Scope` tag and module functions,
   `Closeable`, `ScopeService`, `scope`, `scoped`) over public combinators only; batch E green,
-  rows S1–S8, typetests. Pending: parallel close (batch G; raises NotImplementedError for now),
-  `Scope.use`, remaining batch F, lesson 06. Unmodeled by the formal kernel.
+  rows S1–S8, typetests. Pending: `Scope.use`, remaining batch F, lesson 06. Unmodeled by the
+  formal kernel.
 - Resource unit (2026-11-15): `resources.py` provides default masked `acquire_release`,
   `acquire_use_release`, and `add_finalizer` over public primitives. All 22 upstream/source-derived
   cases pass, with resource/error requirement typetests. Independent Sol review, structure review
@@ -103,8 +103,13 @@ an AGENTS.md section with the idiom and the mistakes it prevents.
   `fork` / `fork_daemon(uninterruptible="inherit")`; defaults remain interruptible. Thirteen tests,
   type fixtures and targeted mutations pass; the kernel model now covers inherited startup.
   Independent Sol review and recheck passed. The iterator-error regression preserves target
-  publication and fails only the waiter; 155 tests pass excluding TestClock. Boolean mask modes, concurrent traversal and
-  parallel Scope remain incomplete; consumers must compose these public primitives.
+  publication and fails only the waiter; 155 tests pass excluding TestClock. Boolean mask modes and
+  concurrent traversal remain incomplete; consumers must compose these public primitives.
+
+- Parallel Scope close (2026-11-15): independently verified by Sol 6.1. Several finalizers
+  start newest first in mask-inheriting daemon fibers, then `await_all` (`internal/effect.ts:4077-4101`);
+  batch G's four Scope.test.ts ports pass (:7 adapted with Deferred gates, no TestClock). The
+  closing-fiber key skip waits on forkIn (batch F). Unmodeled by the formal kernel.
 
 ## Order and why
 

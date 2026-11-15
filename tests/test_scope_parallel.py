@@ -210,3 +210,24 @@ async def test_parallel_continues_and_awaits_remaining_finalizers_after_a_throw(
     ex = await asyncio.wait_for(run(program()), WATCHDOG_SECONDS)
     assert log == ["throwing", "remaining"]
     assert reasons(ex) == ["die:release"]
+
+
+async def test_source_parallel_finalizers_inherit_the_close_mask():
+    """internal/effect.ts:4094 forkUnsafe(..., "inherit"): a parallel finalizer runs masked like
+    the masked close that starts it, so interrupting its own fiber does not cut it short."""
+    scope = Scope.make_unsafe("parallel")
+    done: list[str] = []
+
+    def self_interrupt(fiber: AnyFiber) -> Effect[None, Never, Never]:
+        fiber.interrupt_unsafe()
+        return yield_now.flat_map(lambda _: sync(lambda: done.append("interrupted-self")))
+
+    @gen
+    def program():
+        yield from Scope.add_finalizer(scope, sync(lambda: done.append("other")))
+        yield from Scope.add_finalizer(scope, WithFiber(self_interrupt))
+        return (yield from exit_(Scope.close(scope, Success(None))))
+
+    ex = await run(program())
+    assert isinstance(ex, Success)
+    assert sorted(done) == ["interrupted-self", "other"]

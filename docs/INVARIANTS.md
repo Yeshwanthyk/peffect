@@ -148,19 +148,19 @@ does not import it. Upstream: `internal/effect.ts:6395-6486`.
 ## Scope
 
 `src/peffect/scope.py`, outside the kernel: it composes the public `uninterruptible`, `suspend`,
-`on_exit`, `update_context` and `exit_`, and reaches no fiber internals (B1–B3). Upstream:
-`Scope.ts`, `internal/effect.ts:4033-4215`. Sequential strategy only; see S8.
+`on_exit`, `update_context`, `exit_`, `fork_daemon` and `await_all`, and reaches no fiber
+internals (B1–B3). Upstream: `Scope.ts`, `internal/effect.ts:4033-4215`. Both strategies; S8.
 
 | # | Invariant | Enforced by | Pinned by |
 |---|---|---|---|
 | S1 | **Closed is set once, before any finalizer runs.** A second close runs nothing (`scopeCloseUnsafe`, :4040-4056). | `Scope.close_unsafe` checks `Closed` first | `test_closing_the_parent_closes_the_child_with_the_parents_exit_only_once` |
 | S2 | **Newest first, each once, each given the close Exit.** | `_close_finalizers` (`reversed`) | `test_doc_close_runs_three_finalizers_newest_first_after_the_work`, `test_sequential_continues_and_awaits_remaining_finalizers_after_a_throw` |
-| S3 | **`close` runs its finalizers masked.** Masking comes before the suspend that reads the state, so no interrupt lands between them (`scopeClose`, :4033-4038). | `uninterruptible(suspend(...))` | `test_sequential_completes_direct_close_after_interruption`, `test_sequential_completes_a_single_finalizer_when_its_callback_interrupts_close` |
+| S3 | **`close` runs its finalizers masked.** Masking comes before the suspend that reads the state, so no interrupt lands between them (`scopeClose`, :4033-4038). | `uninterruptible(suspend(...))` | `test_sequential_completes_direct_close_after_interruption`, `test_sequential_completes_a_single_finalizer_when_its_callback_interrupts_close`, and their `parallel_` ports |
 | S4 | **A direct close keeps every failure reason, in order, with no merging and no election** (`exitAsVoidAll`, :2221-2234). | `_as_void_all` builds `Cause(tuple(...))`, not `+` | `test_source_direct_close_keeps_every_failure_reason_and_elects_no_defect` |
 | S5 | **A finalizer added after close runs at once with the closed Exit**; a fork of a closed scope starts Closed (:4113-4130). | `add_finalizer_exit`, `fork_unsafe` | `test_source_a_finalizer_added_after_close_runs_at_once_with_the_closed_exit`, `test_source_forking_a_closed_parent_gives_a_child_closed_with_the_parents_exit` |
 | S6 | **A child leaves its parent when it closes**, however its close ends. | `close_unsafe` removes the child key before running finalizers | the three `..._child_...` tests |
 | S7 | **`scoped` restores the context before closing.** `on_exit` sits outside `update_context`, so the restore frame pops first; a pending interrupt before install leaves only an unreachable empty scope. | `scoped` composition | `test_source_scoped_restores_the_context_before_running_finalizers` |
-| S8 | **Parallel with several finalizers raises `NotImplementedError`**, before any state change. Temporary: upstream forks them; not a contract, no test pins it. | `close_unsafe` | none (by decision) |
+| S8 | **Parallel with several finalizers overlaps them.** Newest first, each is started in a daemon fiber that inherits the closing fiber's mask (`forkUnsafe(..., true, true, "inherit")`, :4089-4095); `await_all` returns their Exits in that order for S4. Upstream's skip of a finalizer keyed by the closing fiber (`forkIn`) is unreachable until forkIn lands (UPSTREAM_TESTS batch G). | `_close_finalizers` (`fork_daemon(start_immediately=True, uninterruptible="inherit")`, then `await_all`) | `test_parallel_executes_finalizers_in_parallel`, `test_parallel_completes_direct_close_after_interruption`, `test_parallel_continues_and_awaits_remaining_finalizers_after_a_throw`; `test_source_parallel_finalizers_inherit_the_close_mask` (source-derived) |
 
 **Not in the formal model.** `verify-formal-kernel` does not model Scope. It changes no kernel
 node: it only composes public combinators the kernel already has.

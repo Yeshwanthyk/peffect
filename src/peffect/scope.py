@@ -13,10 +13,9 @@ Effect v4: Scope.ts, internal/effect.ts:4024-4215 (scopeClose ... scoped). Upstr
 ``Scope.use`` (scopeUse) is not ported: on this Tag ``Scope().use()`` is the service lookup
 every Tag has, the same effect as ``scope``.
 
-``"parallel"`` is upstream's API and is accepted. Its empty and one-finalizer closes take the
-common path, as upstream's do. Closing a parallel scope with several finalizers forks them in
-upstream; that path is not ported yet, so it raises NotImplementedError instead of running them
-one by one. Temporary, not a contract.
+A ``"parallel"`` scope with several finalizers starts each one, newest first, in its own daemon
+fiber that inherits the closing fiber's mask, then waits for all of them; empty and
+one-finalizer closes take the common path, as upstream's do.
 """
 
 from __future__ import annotations
@@ -40,6 +39,7 @@ from .core import (
     uninterruptible,
     update_context,
 )
+from .fiber import Fiber, await_all, fork_daemon
 
 type Strategy = Literal["sequential", "parallel"]
 type Finalizer = Callable[[Exit[Any, Any]], Effect[Any, Never, Never]]
@@ -174,13 +174,26 @@ def _as_void_all(exits: list[Exit[Any, Never]]) -> Exit[None, Never]:
 
 @gen
 def _close_finalizers(
-    finalizers: dict[object, Finalizer], closed_with: Exit[Any, Any]
+    strategy: Strategy, finalizers: dict[object, Finalizer], closed_with: Exit[Any, Any]
 ) -> Generator[Effect[Any, Never, Never], Any]:
-    """scopeCloseFinalizers, :4077-4101, sequential: newest first, each one's Exit collected."""
+    """scopeCloseFinalizers, :4077-4101: newest first. Sequential runs each to its Exit in turn;
+    parallel starts each in a daemon fiber with the closing fiber's mask, then awaits them all.
+    Upstream also skips a finalizer keyed by the closing fiber (forkIn); none exists here yet."""
     exits: list[Exit[Any, Never]] = []
+    fibers: list[Fiber[Any, Never]] = []
     for finalizer in reversed(list(finalizers.values())):
-        ex: Exit[Any, Never] = yield from exit_(_run_finalizer(finalizer, closed_with))
-        exits.append(ex)
+        if strategy == "sequential":
+            ex: Exit[Any, Never] = yield from exit_(_run_finalizer(finalizer, closed_with))
+            exits.append(ex)
+        else:
+            fiber: Fiber[Any, Never] = yield from fork_daemon(
+                _run_finalizer(finalizer, closed_with),
+                start_immediately=True,
+                uninterruptible="inherit",
+            )
+            fibers.append(fiber)
+    if fibers:
+        exits = yield from await_all(fibers)
     yield from _as_void_all(exits)
 
 
@@ -232,9 +245,6 @@ class Scope(Tag[ScopeService]):
         state = scope.state
         if isinstance(state, Closed):
             return None
-        if isinstance(state, Open) and state.finalizers is not None and len(state.finalizers) > 1:
-            if scope.strategy == "parallel":
-                raise NotImplementedError("closing a parallel Scope with several finalizers")
         scope.state = Closed(exit_)
         if scope.parent is not None:
             _remove_finalizer_unsafe(scope.parent, scope)
@@ -246,7 +256,7 @@ class Scope(Tag[ScopeService]):
         assert finalizers is not None  # Open holds the inline finalizer or the dict
         if len(finalizers) == 1:
             return _run_finalizer(next(iter(finalizers.values())), exit_)
-        return _close_finalizers(finalizers, exit_)
+        return _close_finalizers(scope.strategy, finalizers, exit_)
 
     @staticmethod
     def close(scope: Closeable, exit_: Exit[Any, Any]) -> Effect[None, Never, Never]:

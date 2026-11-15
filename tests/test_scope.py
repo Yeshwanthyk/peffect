@@ -2,7 +2,7 @@
 vendor/effect-v4 commit 289a53f (Effect v4.1.4), packages/effect/test/Scope.test.ts; the
 implementation it pins is src/Scope.ts over internal/effect.ts:4033-4240 (scopeClose,
 scopeCloseUnsafe, scopeForkUnsafe, scopeAddFinalizerExit, scopeMakeUnsafe, scoped). The
-parallel variants and "executes finalizers in parallel" (:7, needs TestClock) are batch G.
+parallel variants and "executes finalizers in parallel" (:7) are in tests/test_scope_parallel.py.
 
 Below the upstream tests: the Scope.ts doc examples that add coverage the tests above don't
 have (the rest repeat it), then source-derived cases where neither has a test, each labelled.
