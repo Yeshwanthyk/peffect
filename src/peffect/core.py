@@ -320,6 +320,29 @@ class OnFailure(Effect[A_co, E_co, R_co], Frame):
         return self.f(cause)
 
 
+@final
+class ExitFrame(Effect[Any, Never, R_co], Frame):
+    """``exit_``'s frame: either outcome of ``eff`` becomes the success value, as an Exit. Not a
+    restoring frame, so an interrupt delivered while interruptible skips it like any other
+    handler (``Failure._eval``). Effect v4: exitPrimitive, internal/effect.ts:3876-3889."""
+
+    __slots__ = ("eff",)
+    kind = OK | ERR
+
+    def __init__(self, eff: AnyEffect) -> None:
+        self.eff = eff
+
+    def _eval(self, fiber: AnyFiber) -> AnyEffect | None:
+        fiber.stack.append(self)
+        return self.eff
+
+    def on_ok(self, value: Any, fiber: AnyFiber) -> AnyEffect | None:
+        return Success(Success(value))
+
+    def on_err(self, cause: Cause[Any], fiber: AnyFiber) -> AnyEffect | None:
+        return Success(Failure(cause))
+
+
 def _mask_while_popping(fiber: AnyFiber) -> None:
     """Make the fiber uninterruptible for the handler about to run; restore it afterwards."""
     if fiber.interruptible:
@@ -501,6 +524,14 @@ def suspend[A, E, R](thunk: Callable[[], Effect[A, E, R]]) -> Effect[A, E, R]:
 
 def async_[A, E = Never, R = Never](register: Register[A, E, R]) -> Effect[A, E, R]:
     return Async(register)
+
+
+def exit_[A, E, R](eff: Effect[A, E, R]) -> Effect[Exit[A, E], Never, R]:
+    """Run ``eff`` and succeed with how it ended. An Exit passed in is the value as it is.
+    Effect v4: exit, internal/effect.ts:3873-3874."""
+    if isinstance(eff, (Success, Failure)):
+        return Success(eff)
+    return ExitFrame(eff)
 
 
 yield_now: Effect[None, Never, Never] = YieldNow()

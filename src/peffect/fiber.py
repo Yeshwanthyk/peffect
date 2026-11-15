@@ -276,23 +276,40 @@ def _start[A, E](
     eff: Effect[A, E, Any],
     ctx: ContextMap,
     loop: asyncio.AbstractEventLoop,
+    immediate: bool = False,
 ) -> Fiber[A, E]:
+    """Effect v4: forkUnsafe, internal/effect.ts:5614-5637. ``immediate`` runs the child's first
+    slice now, inside the caller's drive, until it parks or ends; otherwise it is scheduled."""
     child: Fiber[A, E] = Fiber(loop, ctx, parent)
     if parent is not None:
         parent.children.add(child)
-    loop.call_soon(child._drive, eff)  # pyright: ignore[reportPrivateUsage]
+    drive = child._drive  # pyright: ignore[reportPrivateUsage]
+    if immediate:
+        drive(eff)
+    else:
+        loop.call_soon(drive, eff)
     return child
 
 
-def fork[A, E, R](eff: Effect[A, E, R]) -> Effect[Fiber[A, E], Never, R]:
+def fork[A, E, R](
+    eff: Effect[A, E, R], *, start_immediately: bool = False
+) -> Effect[Fiber[A, E], Never, R]:
     """Run eff concurrently. The child is supervised: when the parent ends, the child is
-    interrupted and the parent waits for it."""
-    return WithFiber(lambda p: Success(_start(p, eff, p.context, p._loop)))  # pyright: ignore[reportPrivateUsage]
+    interrupted and the parent waits for it. ``start_immediately`` runs the child until it first
+    parks or ends before ``fork`` returns (Effect v4: forkChild's ``startImmediately``)."""
+    return WithFiber(
+        lambda p: Success(_start(p, eff, p.context, p._loop, start_immediately))  # pyright: ignore[reportPrivateUsage]
+    )
 
 
-def fork_daemon[A, E, R](eff: Effect[A, E, R]) -> Effect[Fiber[A, E], Never, R]:
-    """Run eff concurrently with no parent: it outlives the fiber that started it."""
-    return WithFiber(lambda p: Success(_start(None, eff, p.context, p._loop)))  # pyright: ignore[reportPrivateUsage]
+def fork_daemon[A, E, R](
+    eff: Effect[A, E, R], *, start_immediately: bool = False
+) -> Effect[Fiber[A, E], Never, R]:
+    """Run eff concurrently with no parent: it outlives the fiber that started it.
+    ``start_immediately`` as for ``fork`` (Effect v4: forkDetach, internal/effect.ts:5728)."""
+    return WithFiber(
+        lambda p: Success(_start(None, eff, p.context, p._loop, start_immediately))  # pyright: ignore[reportPrivateUsage]
+    )
 
 
 async def run_exit[A, E](eff: Effect[A, E, Never]) -> Exit[A, E]:

@@ -7,6 +7,9 @@
    The one exception, code a node calls synchronously inside the drive (an Async `register`)
    calling interrupt_unsafe on its own fiber, is the `self` choice in Park.
 
+   Fork with startImmediately (fiber._start(immediate=True)) drives C synchronously inside P's
+   drive until C parks or ends; `under` holds P while that nested drive runs.
+
    Two fibers: P forks C, parks, and ends while C may still run. C parks, masks, parks again
    inside the mask, and unmasks. An interrupter interrupts P once, at any loop turn.
    Async completions (resume callbacks) arrive at any loop turn, late ones included.     *)
@@ -27,8 +30,9 @@ VARIABLES
   started,  \* C has been forked (fiber._start)
   obs,      \* P's _await_all observer is registered on C (Fiber.add_observer)
   sent,     \* the interrupter has called P.interrupt_unsafe
-  selfUsed  \* a register has interrupted its own fiber (bounded to once)
-vars == <<cur, fb, started, obs, sent, selfUsed>>
+  selfUsed, \* a register has interrupted its own fiber (bounded to once)
+  under     \* the fiber whose drive is suspended under cur's nested drive, or "none"
+vars == <<cur, fb, started, obs, sent, selfUsed, under>>
 
 (* fb[f] fields and the Fiber field each models:
    pc      next instruction (straight-line Prog), WAIT while waiting on children
@@ -49,7 +53,10 @@ Init ==
              parked |-> FALSE, pid |-> 0, pdone |-> TRUE, wakes |-> 0, ext |-> {},
              drv |-> IF f = "P" THEN <<"start">> ELSE <<>>,
              ending |-> "none", exit |-> "none", pubs |-> 0, req |-> FALSE]]
-  /\ started = FALSE /\ obs = FALSE /\ sent = FALSE /\ selfUsed = FALSE
+  /\ started = FALSE /\ obs = FALSE /\ sent = FALSE /\ selfUsed = FALSE /\ under = "none"
+
+\* the running drive returns: to the drive it was nested in (immediate fork), or to the loop
+EndDrive == cur' = under /\ under' = "none"
 
 Masked(f) == f = "C" /\ fb[f].pc \in {3, 4}  \* between C's "mask" and "unmask"
 
@@ -74,17 +81,17 @@ DriveTail(r) ==
 \* Fiber._drive entry (scheduled by _start, _wake, _interrupt_parked)
 Drive(f) ==
   LET r == fb[f] IN
-  /\ cur = "none" /\ r.drv # <<>>
+  /\ cur = "none" /\ under = "none" /\ r.drv # <<>>
   /\ cur' = f
   /\ fb' = [fb EXCEPT ![f] = [r EXCEPT !.node = Head(r.drv), !.drv = Tail(r.drv), !.parked = FALSE]]
-  /\ UNCHANGED <<started, obs, sent, selfUsed>>
+  /\ UNCHANGED <<started, obs, sent, selfUsed, under>>
 
 \* Fiber._drive loop top: `if self._deferred and self.interruptible` -> Failure(take_interrupt())
 LoopTop(f) ==
   LET r == fb[f] IN
   /\ cur = f /\ r.dfr /\ r.intr /\ Break # "no_loop_top"
   /\ fb' = [fb EXCEPT ![f] = [r EXCEPT !.node = "int", !.dfr = FALSE]]
-  /\ UNCHANGED <<cur, started, obs, sent, selfUsed>>
+  /\ UNCHANGED <<cur, started, obs, sent, selfUsed, under>>
 
 Ready(f) == cur = f /\ (~(fb[f].dfr /\ fb[f].intr) \/ Break = "no_loop_top")
 
@@ -107,19 +114,19 @@ Done(f, e, o) ==
                               !["P"] = IF oldPub THEN [p EXCEPT !.exit = p.ending, !.pubs = @ + 1]
                                        ELSE IF notify THEN Wake(p) ELSE p]
      /\ obs' = IF f = "C" THEN FALSE ELSE o
-     /\ cur' = "none"
+     /\ EndDrive
      /\ UNCHANGED <<started, sent, selfUsed>>
   ELSE IF Break = "old_done" THEN
      /\ fb' = [fb EXCEPT !["P"] = [r EXCEPT !.ending = e2, !.pc = WAIT, !.node = "none"],
                          !["C"] = IntUnsafe(@, FALSE)]
      /\ obs' = TRUE
-     /\ cur' = "none"
+     /\ EndDrive
      /\ UNCHANGED <<started, sent, selfUsed>>
   ELSE  \* remember the exit, interrupt C, and evaluate _await_all inside this drive
      /\ fb' = [fb EXCEPT !["P"] = [r EXCEPT !.ending = e2, !.pc = WAIT, !.node = "await"],
                          !["C"] = IntUnsafe(@, FALSE)]
      /\ obs' = o
-     /\ UNCHANGED <<cur, started, sent, selfUsed>>
+     /\ UNCHANGED <<cur, started, sent, selfUsed, under>>
 
 \* core.py Async._eval: register (which may interrupt its own fiber), _park, end of drive
 Park(f) ==
@@ -129,7 +136,7 @@ Park(f) ==
         r2 == [r1 EXCEPT !.ext = @ \cup {r.pc}, !.parked = TRUE, !.pid = r.pc, !.pdone = FALSE,
                          !.wakes = 0, !.pc = @ + 1, !.node = "none"]
     IN /\ fb' = [fb EXCEPT ![f] = DriveTail(r2)]
-       /\ cur' = "none"
+       /\ EndDrive
        /\ selfUsed' = (selfUsed \/ self)
        /\ UNCHANGED <<started, obs, sent>>
 
@@ -139,7 +146,7 @@ AwaitPark ==
       r2 == [r EXCEPT !.parked = TRUE, !.pid = WAIT, !.pdone = FALSE, !.wakes = 0, !.node = "none"]
   IN /\ fb' = [fb EXCEPT !["P"] = DriveTail(r2)]
      /\ obs' = TRUE
-     /\ cur' = "none"
+     /\ EndDrive
      /\ UNCHANGED <<started, sent, selfUsed>>
 
 \* one node of Fiber._drive's loop (`cur = cur._eval(self)`)
@@ -156,18 +163,25 @@ Eval(f) ==
      ELSE IF r.pc = WAIT \/ r.pc = End(f) THEN Done(f, "ok", obs)
      ELSE IF ins = "park" THEN Park(f)
      ELSE IF ins = "fork" THEN
+        \E imm \in BOOLEAN :
         /\ started' = TRUE
-        /\ fb' = [fb EXCEPT ![f] = [r EXCEPT !.pc = @ + 1, !.node = "ok"],
-                            !["C"] = [@ EXCEPT !.drv = Append(@, "start")]]
-        /\ UNCHANGED <<cur, obs, sent, selfUsed>>
+        /\ IF imm THEN  \* _start(immediate=True): C's _drive runs now, nested in P's
+              /\ fb' = [fb EXCEPT ![f] = [r EXCEPT !.pc = @ + 1, !.node = "ok"],
+                                  !["C"] = [@ EXCEPT !.node = "start", !.parked = FALSE]]
+              /\ cur' = "C" /\ under' = f
+              /\ UNCHANGED <<obs, sent, selfUsed>>
+           ELSE  \* _start: C's _drive is scheduled (loop.call_soon)
+              /\ fb' = [fb EXCEPT ![f] = [r EXCEPT !.pc = @ + 1, !.node = "ok"],
+                                  !["C"] = [@ EXCEPT !.drv = Append(@, "start")]]
+              /\ UNCHANGED <<cur, obs, sent, selfUsed, under>>
      ELSE IF ins = "mask" THEN
         /\ fb' = [fb EXCEPT ![f] = [r EXCEPT !.pc = @ + 1, !.node = "ok", !.intr = FALSE]]
-        /\ UNCHANGED <<cur, started, obs, sent, selfUsed>>
+        /\ UNCHANGED <<cur, started, obs, sent, selfUsed, under>>
      ELSE \* "unmask": SetInterruptible.on_any delivers a waiting interrupt via take_interrupt
         /\ fb' = [fb EXCEPT ![f] = [r EXCEPT !.pc = @ + 1, !.intr = TRUE,
                                              !.node = IF r.irq THEN "int" ELSE "ok",
                                              !.dfr = IF r.irq THEN FALSE ELSE r.dfr]]
-        /\ UNCHANGED <<cur, started, obs, sent, selfUsed>>
+        /\ UNCHANGED <<cur, started, obs, sent, selfUsed, under>>
 
 \* an async completion fires: Async resume checks `not park.done`
 ExtResume(f) ==
@@ -177,14 +191,14 @@ ExtResume(f) ==
         hit == (id = r.pid /\ ~r.pdone) \/ (Break = "no_park_done" /\ r.exit = "none")
     IN /\ cur = "none"
        /\ fb' = [fb EXCEPT ![f] = IF hit THEN Wake(r1) ELSE r1]
-       /\ UNCHANGED <<cur, started, obs, sent, selfUsed>>
+       /\ UNCHANGED <<cur, started, obs, sent, selfUsed, under>>
 
 \* someone calls P.interrupt_unsafe from another callback
 Interrupt ==
   /\ cur = "none" /\ ~sent /\ fb["P"].exit = "none"
   /\ sent' = TRUE
   /\ fb' = [fb EXCEPT !["P"] = IntUnsafe(@, FALSE)]
-  /\ UNCHANGED <<cur, started, obs, selfUsed>>
+  /\ UNCHANGED <<cur, started, obs, selfUsed, under>>
 
 Settled(f) == fb[f].drv = <<>> /\ fb[f].ext = {} /\ (fb[f].exit # "none" \/ (f = "C" /\ ~started))
 Finished == cur = "none" /\ \A f \in Fibers : Settled(f)
@@ -200,7 +214,8 @@ Spec == Init /\ [][Next]_vars /\ WF_vars(Next)
 \* ---- invariants (docs/INVARIANTS.md) ----
 K1_ExitOnce      == \A f \in Fibers : fb[f].pubs <= 1
 K2_ResumeOnce    == \A f \in Fibers : fb[f].wakes <= 1
-K3_OneRunner     == \A f \in Fibers : Len(fb[f].drv) + (IF cur = f THEN 1 ELSE 0) <= 1
+K3_OneRunner     == \A f \in Fibers :
+                      Len(fb[f].drv) + (IF cur = f THEN 1 ELSE 0) + (IF under = f THEN 1 ELSE 0) <= 1
 K6_MasksHold     == \A f \in Fibers : (cur = f /\ fb[f].node = "int") => ~Masked(f)
 K7_InterruptsLand == \A f \in Fibers : (fb[f].exit # "none" /\ fb[f].req) => fb[f].exit = "int"
 K8_NoOrphans     == (fb["P"].exit # "none" /\ started) => fb["C"].exit # "none"

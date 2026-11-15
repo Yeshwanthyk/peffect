@@ -29,13 +29,13 @@ Derived: `Fiber.exit` (property), `Cause.is_interrupted` etc. Nothing is cached.
 
 | transition | trigger | precondition | write | code |
 |---|---|---|---|---|
-| start | `fork` / `run_exit` | — | child in `parent.children`; one `_drive` scheduled | `fiber._start` |
+| start | `fork` / `fork_daemon` / `run_exit` | — | child in `parent.children` (not for a daemon); one `_drive` scheduled, or with `start_immediately=True` run now, nested in the caller's drive, until it parks or ends (v4 forkUnsafe, internal/effect.ts:5614-5637) | `fiber._start` |
 | step | run loop | `running` | eval one node; maybe push/pop frames | `Fiber._drive` |
 | park | `Async._eval` | `register` didn't resume synchronously | `_parked = park`; push `_AsyncCancel` if cancel | `Async._eval` |
 | resume | callback from asyncio / another fiber | `not park.done` | `park.done = True`; schedule `_drive(eff)` | `Async._eval.resume` |
 | interrupt | `interrupt_unsafe(by)` | not finished | add to `interrupted`; parked+interruptible → wake with Failure, else `_deferred` | `Fiber.interrupt_unsafe` |
 | deliver | loop top / `SetInterruptible` pop / `interruptible()` / unwind / parked wake | interrupt pending and interruptible | `take_interrupt()` clears `_deferred`; the node becomes (or the unwinding cause gains) `interrupted` | `Fiber.take_interrupt` |
-| unwind | `Failure._eval` while interrupted+interruptible | — | pop handlers until a frame masks (OnExit, AsyncCancel) | `Failure._eval` |
+| unwind | `Failure._eval` while interrupted+interruptible | — | pop handlers until a frame masks (OnExit, AsyncCancel); `exit_`'s `ExitFrame` is popped like any handler, so it never turns its own fiber's interrupt into a value (v4 exitFailCause, internal/core.ts:611-624) | `Failure._eval` |
 | finish | stack empty | — | remember the exit in `_ending`; interrupt live children; park on `_await_all` *inside the run loop* (so an interrupt during the wait is delivered and merged into the exit); publish once no child is live | `Fiber._done`, `_await_all`, `_publish` |
 
 ## Invariants

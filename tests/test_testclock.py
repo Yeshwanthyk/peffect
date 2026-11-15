@@ -21,11 +21,10 @@ Adaptations used throughout:
   `provide(Clock.context(clock))` around the body. Missing until Layer and scheduler tracking
   exist: the TrackingScheduler as Scheduler, and TestConsole. Every test runs under it,
   including the ones that also make a clock of their own, since that `make()` needs the Scope.
-- `scoped` and `fork(..., start_immediately=True)` aren't built yet either, so they are looked
-  up when the test runs, like `peffect.testing`.
+- `scoped` isn't built yet either, so it is looked up when the test runs, like `peffect.testing`.
 - `fiber.pollUnsafe()` is `fiber.exit` (D6); `Exit.void` is a `Success` holding `None`.
   `Effect.delay(d)` is `sleep(d).flat_map(...)` and `Effect.forever` a `@gen` `while True` (D7).
-- `forkChild({ startImmediately: true })` is `fork(eff, start_immediately=True)` (`fork_now`).
+- `forkChild({ startImmediately: true })` is `fork(eff, start_immediately=True)`.
 """
 
 import importlib
@@ -36,7 +35,6 @@ from peffect import (
     Clock,
     Effect,
     Exit,
-    Fiber,
     Success,
     ensuring,
     fork,
@@ -60,12 +58,6 @@ def scoped[A, E](eff: Effect[A, E, Any]) -> Effect[A, E, Never]:
     """`Effect.scoped` (internal/effect.ts:4206): AttributeError until Scope exists."""
     upcoming: Any = peffect  # typed lookup: replaced by `from peffect import scoped`
     return upcoming.scoped(eff)
-
-
-def fork_now[A, E, R](eff: Effect[A, E, R]) -> Effect[Fiber[A, E], Never, R]:
-    """`Effect.forkChild(eff, { startImmediately: true })`: TypeError until `fork` takes it."""
-    upcoming: Any = fork  # typed lookup: becomes a direct call once the keyword exists
-    return upcoming(eff, start_immediately=True)
 
 
 def make_test_clock() -> Effect[Any, Never, Any]:
@@ -105,7 +97,7 @@ async def test_adjust_skips_the_cancelled_deadline_interrupted_sleep():
     @gen
     def program():
         test_clock = yield from make_test_clock()
-        sleeper = yield from fork_now(test_clock.sleep(60))
+        sleeper = yield from fork(test_clock.sleep(60), start_immediately=True)
         yield from yield_now
         yield from sleeper.interrupt()
 
@@ -174,7 +166,9 @@ async def test_sleep_preserves_interruption_masking_in_a_finalizer_on_first_use(
     @gen
     def program():
         clock = yield from make_test_clock()
-        fiber = yield from fork_now(provide(Clock.context(clock))(never.pipe(ensuring(cleanup()))))
+        fiber = yield from fork(
+            provide(Clock.context(clock))(never.pipe(ensuring(cleanup()))), start_immediately=True
+        )
         fiber.interrupt_unsafe()
         yield from yield_now
         assert events == ["cleanup started"]

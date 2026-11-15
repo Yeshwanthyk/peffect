@@ -46,11 +46,14 @@ an AGENTS.md section with the idiom and the mistakes it prevents.
 - Tier 2a, upstream test port (2026-11-15): batches A (Context) and B (kernel finalization) from
   `docs/UPSTREAM_TESTS.md` pass: `Context.empty`, Context equality (C9), `on_error`,
   `on_interrupt`, and `on_exit` keeping the body's failure with defect election (K9). Batch C
-  (Clock) is ported; TestClock (D) and Scope (E–G) are not started.
+  (Clock) is ported; TestClock (D) and Scope (E) tests are drafted, red only on their missing API.
 - Tier 2b, Clock (2026-11-15): independently reviewed; seconds-only API remains incomplete. Leaf `clock.py` (`Clock` Reference,
   `ClockService` Protocol, `clock_with`, time reads, `sleep` moved out of `core.py`), batch C and
   the source-derived sleep tests green, `examples/clock.py` in `verify-peffect`, rows CL1–CL5,
   lesson 05. TestClock is the remaining half of this roadmap row.
+- Kernel prerequisites for Scope/TestClock (2026-11-15): `fork`/`fork_daemon(start_immediately=True)`
+  (v4 forkUnsafe immediate start) and `exit_` (v4 `Effect.exit`), ported with their upstream
+  tests in `tests/test_fiber_start_upstream.py`; formal model updated (nested immediate drive).
 
 ## Order and why
 

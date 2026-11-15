@@ -19,7 +19,7 @@ interrupter. The model is `FiberKernel.tla`. The same promises are tested on the
 | `Park`, `ExtResume`, `Wake` | `core.Async._eval` (register, `_park`), its `resume` with the `Park.done` guard |
 | `Eval` "mask" / "unmask" | `uninterruptible`; `SetInterruptible.on_any` delivering through `take_interrupt` |
 | `Done`, `AwaitPark` | `Fiber._done` (`_ending`, interrupt children), `_await_all`, `_publish`, `add_observer` |
-| `Eval` "fork" | `fiber._start` via `fork` |
+| `Eval` "fork", `under`, `EndDrive` | `fiber._start` via `fork` (`fork_daemon` shares it; a parentless child isn't modeled); `start_immediately=True` runs `child._drive` nested in the parent's drive (`under` holds the suspended parent until the child's slice ends) |
 
 **Not modeled: context.** The model has no context state. `update_context`, `RestoreContext`,
 `Fiber.swap_context` and the context a fork passes on are proven by `tests/test_context.py`
@@ -29,11 +29,13 @@ Why the model's pass still means something with them added (an argument, not a c
 nor holds back an interrupt, and the model's "the interrupt unwinds to the top" still describes
 the code.
 
-**Sync:** Context's protocol baseline is commit `b74fa2f` (2026-11-15).
-Sol independently reran the model and linked tests after the finalization changes on top of
-`1c2828b`: 670 states, depth 21, all configured rules hold. Those changes to `OnExit` callback
-handling and cause election are outside the modeled finalizer-body semantics; upstream runtime
-tests, not this model, check them. The modeled protocol operations are unchanged.
+**Sync:** 2026-11-15, on top of `05a97f0` with the uncommitted immediate-fork change
+(`_start(immediate)`, Effect v4 forkUnsafe internal/effect.ts:5614-5637): the fork action
+chooses scheduled or immediate; 673 states, depth 20, all configured rules hold, every
+`Break_*.cfg` still red, and a scratch `_done` break turns the linked tests red. `exit_`'s
+`ExitFrame` is an ordinary handler frame, abstracted like other handlers into "the interrupt
+unwinds to the top". Earlier: context baseline `b74fa2f`; finalization changes on `1c2828b`
+(`OnExit` callbacks, cause election) are outside the modeled semantics.
 A change to any symbol in the table, or new code that writes
 `_deferred`, `_parked`, `Park.done`, `_exit`, `children` or `interruptible`, means the model
 needs another look before its pass means anything.
@@ -53,7 +55,7 @@ needs another look before its pass means anything.
 **Reach:** every interleaving of this instance: P forks C, parks, and ends; C parks, masks,
 parks inside the mask, and unmasks. One external interrupt of P can arrive at any loop turn,
 async completions can arrive at any turn (late ones included), and one `register` can
-interrupt its own fiber. 670 states, depth 21.
+interrupt its own fiber. A fork may start its child immediately, nested. 673 states, depth 20.
 
 **Assumptions:**
 - One asyncio loop. `_drive` never awaits.

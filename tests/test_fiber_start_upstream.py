@@ -7,9 +7,9 @@ has. The second section is source-derived and labelled that way: assertions read
 internal/effect.ts (forkUnsafe :5614-5637, exit :3873-3889) where no upstream test exists.
 
 Adaptations used throughout:
-- `forkChild({ startImmediately: true })` is `fork(eff, start_immediately=True)` and
-  `Effect.exit` is `exit_`. Neither exists yet, so both are looked up when the test runs
-  (`fork_now`, `exit_of`): until then each test fails instead of the file failing to import.
+- `forkChild({ startImmediately: true })` is `fork(eff, start_immediately=True)`,
+  `Effect.forkDetach(..., { startImmediately: true })` is `fork_daemon(..., start_immediately=True)`
+  and `Effect.exit` is `exit_`.
 - `Fiber.getCurrent()` is the fiber `WithFiber` hands over; `Fiber.interrupt(f)` is
   `f.interrupt()`, `Fiber.await(f)` is `f.await_()`, `Effect.forkDetach` is `fork_daemon`.
 - `Exit.hasInterrupts(exit)` is "a Failure with an Interrupt among its reasons". peffect's Exit
@@ -19,7 +19,6 @@ Adaptations used throughout:
 
 from typing import Any, Never
 
-import peffect
 from peffect import (
     Cause,
     Effect,
@@ -28,6 +27,7 @@ from peffect import (
     Fiber,
     Interrupt,
     Success,
+    exit_,
     fail,
     fork,
     fork_daemon,
@@ -42,18 +42,6 @@ from peffect import (
     yield_now,
 )
 from peffect.core import AnyFiber, WithFiber
-
-
-def fork_now[A, E, R](eff: Effect[A, E, R]) -> Effect[Fiber[A, E], Never, R]:
-    """`Effect.forkChild(eff, { startImmediately: true })`: TypeError until `fork` takes it."""
-    upcoming: Any = fork  # typed lookup: becomes a direct call once the keyword exists
-    return upcoming(eff, start_immediately=True)
-
-
-def exit_of[A, E, R](eff: Effect[A, E, R]) -> Effect[Exit[A, E], Never, R]:
-    """`Effect.exit(eff)`: AttributeError until `exit_` exists."""
-    upcoming: Any = peffect
-    return upcoming.exit_(eff)
 
 
 def has_interrupts(ex: Exit[Any, Any]) -> bool:
@@ -76,9 +64,9 @@ async def test_fork_is_interrupted_with_parent():
 
     @gen
     def program():
-        inner = fork_now(never.pipe(on_interrupt(lambda _: mark("child"))))
+        inner = fork(never.pipe(on_interrupt(lambda _: mark("child"))), start_immediately=True)
         outer = inner.flat_map(lambda _: never).pipe(on_interrupt(lambda _: mark("parent")))
-        fiber: Fiber[Never, Never] = yield from fork_now(outer)
+        fiber: Fiber[Never, Never] = yield from fork(outer, start_immediately=True)
         yield from fiber.interrupt()
 
     await run(program())
@@ -97,7 +85,7 @@ async def test_fork_daemon_is_not_interrupted_with_parent():
     def program():
         inner = fork_daemon(never.pipe(on_interrupt(lambda _: mark("child"))))
         outer = inner.flat_map(lambda _: never).pipe(on_interrupt(lambda _: mark("parent")))
-        handle: Fiber[Never, Never] = yield from fork_now(outer)
+        handle: Fiber[Never, Never] = yield from fork(outer, start_immediately=True)
         yield from handle.interrupt()
 
     await run(program())
@@ -115,7 +103,7 @@ async def test_delivers_a_synchronous_self_interrupt_instead_of_completing_to_su
 
     @gen
     def program():
-        child: Fiber[int, Never] = yield from fork_now(WithFiber(body))
+        child: Fiber[int, Never] = yield from fork(WithFiber(body), start_immediately=True)
         ex = yield from child.await_()
         assert has_interrupts(ex)
 
@@ -143,7 +131,7 @@ async def test_runs_an_async_interrupt_finalizer_exactly_once_in_order():
 
     @gen
     def program():
-        child: Fiber[None, Never] = yield from fork_now(WithFiber(body))
+        child: Fiber[None, Never] = yield from fork(WithFiber(body), start_immediately=True)
         ex = yield from child.await_()
         events.append("awaited")
         assert has_interrupts(ex)
@@ -164,14 +152,14 @@ async def test_on_exit_preserves_the_original_failure_when_the_finalizer_throws_
     """Effect.test.ts:3160 "onExit preserves the original failure when the finalizer throws", in
     its upstream form: the Exit is read inside the program by `Effect.exit`.
     tests/test_finalization_upstream.py reads the same case at the edge with `run_exit`."""
-    result = await run(exit_of(fail(BODY).pipe(on_exit(throwing))))
+    result = await run(exit_(fail(BODY).pipe(on_exit(throwing))))
     assert isinstance(result, Failure)
     assert result.cause == Cause.die(BODY) + Cause.die(FIN)
 
 
 async def test_on_exit_reports_a_thrown_finalizer_on_success_read_by_exit():
     """Effect.test.ts:3169 "onExit reports a thrown finalizer on success", read by `Effect.exit`."""
-    result = await run(exit_of(succeed(1).pipe(on_exit(throwing))))
+    result = await run(exit_(succeed(1).pipe(on_exit(throwing))))
     assert isinstance(result, Failure)
     assert result.cause == Cause.die(FIN)
 
@@ -186,7 +174,9 @@ async def test_source_start_immediately_runs_the_child_before_fork_returns():
 
     @gen
     def program():
-        child: Fiber[None, Never] = yield from fork_now(sync(lambda: order.append("child")))
+        child: Fiber[None, Never] = yield from fork(
+            sync(lambda: order.append("child")), start_immediately=True
+        )
         order.append("parent")
         assert isinstance(child.exit, Success)
 
@@ -216,8 +206,8 @@ async def test_source_exit_turns_success_and_failure_into_values():
 
     @gen
     def program():
-        ok = yield from exit_of(succeed(1))
-        failed = yield from exit_of(fail(BODY))
+        ok = yield from exit_(succeed(1))
+        failed = yield from exit_(fail(BODY))
         return ok, failed
 
     ok, failed = await run(program())
@@ -230,5 +220,51 @@ async def test_source_exit_of_an_exit_succeeds_with_that_same_exit():
     straight in comes back as the value, the same object."""
     done: Exit[int, Never] = Success(1)
     failed: Exit[Never, Boom] = Failure(Cause.fail(BODY))
-    assert (await run(exit_of(done))) is done
-    assert (await run(exit_of(failed))) is failed
+    assert (await run(exit_(done))) is done
+    assert (await run(exit_(failed))) is failed
+
+
+async def test_source_fork_daemon_start_immediately_runs_now_and_stays_unsupervised():
+    """forkDetach, internal/effect.ts:5728: `forkUnsafe(parent, self, startImmediately, true)`.
+    The child runs before `fork_daemon` returns, and as a daemon (:5625-5628 skip the parent's
+    children) it is still running after its parent has ended."""
+    order: list[str] = []
+
+    @gen
+    def program():
+        @gen
+        def daemon():
+            order.append("daemon")
+            yield from never
+
+        handle: Fiber[None, Never] = yield from fork_daemon(daemon(), start_immediately=True)
+        order.append("parent")
+        return handle
+
+    handle = await run(program())
+    assert order == ["daemon", "parent"]
+    assert handle.exit is None
+    await run(handle.interrupt())
+
+
+async def test_source_exit_does_not_catch_the_fibers_own_interruption():
+    """exitFailCause, internal/core.ts:611-624: while the fiber is interrupted and interruptible,
+    the unwind skips every handler, the Exit frame included (it has an identifier). So `exit_`
+    can't turn its own fiber's interruption into a value: the fiber ends interrupted and the
+    code after `exit_` never runs."""
+    after: list[object] = []
+
+    @gen
+    def body():
+        ex = yield from exit_(never)
+        after.append(ex)
+
+    @gen
+    def program():
+        fiber: Fiber[None, Never] = yield from fork(body(), start_immediately=True)
+        yield from fiber.interrupt()
+        return (yield from fiber.await_())
+
+    ex = await run(program())
+    assert has_interrupts(ex)
+    assert after == []

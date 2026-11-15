@@ -17,8 +17,10 @@ from peffect import (
     clock_with,
     current_time_millis,
     ensuring,
+    exit_,
     fail,
     fork,
+    fork_daemon,
     gen,
     on_error,
     on_interrupt,
@@ -90,6 +92,13 @@ def parent():
 
 
 assert_type(parent(), Effect[str, NotFound, Never])
+assert_type(fork(find(2), start_immediately=True), Effect[Fiber[str, NotFound], Never, Never])
+assert_type(
+    fork_daemon(find(2), start_immediately=True), Effect[Fiber[str, NotFound], Never, Never]
+)
+
+# exit_ turns both outcomes into the value; the error channel is empty
+assert_type(exit_(find(2)), Effect[Exit[str, NotFound], Never, Never])
 
 
 # -- Context: a tag adds itself to R; provide removes exactly the tags its Context holds ---------

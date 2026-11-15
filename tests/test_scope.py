@@ -14,8 +14,7 @@ Adaptations used throughout:
 - `scope.state._tag` is `scope.state.tag`, with upstream's values "Empty", "Open", "Closed".
 - `Deferred` is tier 3. The tests use it only to signal between the test and a finalizer, so
   `Signal` below stands in: a one-shot latch over the public `async_`, nothing else.
-- `forkChild({ startImmediately: true })` is `fork(eff, start_immediately=True)` (`fork_now`),
-  looked up the same way until `fork` takes the keyword.
+- `forkChild({ startImmediately: true })` is `fork(eff, start_immediately=True)`.
 - Upstream throws strings (`throw "release"`). Python raises exceptions, so a throwing
   finalizer raises `RuntimeError("release")`; `reasons` renders a defect with `str`, as
   upstream's `String(reason.defect)`, giving the same "die:release".
@@ -85,12 +84,6 @@ def close(scope: Any, exit_: Exit[Any, Any]) -> Effect[None, Never, Never]:
 
 def close_unsafe(scope: Any, exit_: Exit[Any, Any]) -> Effect[None, Never, Never] | None:
     return upcoming("Scope").close_unsafe(scope, exit_)
-
-
-def fork_now[A, E, R](eff: Effect[A, E, R]) -> Effect[Fiber[A, E], Never, R]:
-    """`Effect.forkChild(eff, { startImmediately: true })`: TypeError until `fork` takes it."""
-    upcoming: Any = fork
-    return upcoming(eff, start_immediately=True)
 
 
 def exit_of[A, E](eff: Effect[A, E, Any]) -> Effect[Exit[A, E], Never, Never]:
@@ -195,9 +188,11 @@ async def test_sequential_completes_direct_close_after_interruption():
             ran.append("first")
 
         yield from add_finalizer(scope, first())
-        closing: Fiber[None, Never] = yield from fork_now(close(scope, VOID))
+        closing: Fiber[None, Never] = yield from fork(close(scope, VOID), start_immediately=True)
         yield from started.await_()
-        interrupting: Fiber[None, Never] = yield from fork_now(closing.interrupt())
+        interrupting: Fiber[None, Never] = yield from fork(
+            closing.interrupt(), start_immediately=True
+        )
         yield from yield_now
         assert interrupting.exit is None
         yield from release.succeed()
@@ -229,9 +224,13 @@ async def test_close_unsafe_runs_finalizers_when_its_returned_effect_is_masked_b
         yield from add_finalizer(scope, first())
         finalizers = close_unsafe(scope, VOID)
         assert finalizers is not None
-        closing: Fiber[None, Never] = yield from fork_now(uninterruptible(finalizers))
+        closing: Fiber[None, Never] = yield from fork(
+            uninterruptible(finalizers), start_immediately=True
+        )
         yield from started.await_()
-        interrupting: Fiber[None, Never] = yield from fork_now(closing.interrupt())
+        interrupting: Fiber[None, Never] = yield from fork(
+            closing.interrupt(), start_immediately=True
+        )
         yield from release.succeed()
         yield from interrupting.join()
 
@@ -320,9 +319,11 @@ async def test_an_interrupted_close_does_not_leave_the_child_in_its_parent():
     @gen
     def program():
         yield from add_finalizer(child, entered.succeed().flat_map(lambda _: release.await_()))
-        fiber: Fiber[None, Never] = yield from fork_now(close(child, VOID))
+        fiber: Fiber[None, Never] = yield from fork(close(child, VOID), start_immediately=True)
         yield from entered.await_()
-        interrupting: Fiber[None, Never] = yield from fork_now(fiber.interrupt())
+        interrupting: Fiber[None, Never] = yield from fork(
+            fiber.interrupt(), start_immediately=True
+        )
         yield from release.succeed()
         yield from interrupting.join()
 

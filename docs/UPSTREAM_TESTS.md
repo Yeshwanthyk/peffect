@@ -89,8 +89,9 @@ into zero before `sleepMillis` sees it; `sleepMillis` alone would send NaN to `n
 
 | Batch | File | Ports | Needs | Status |
 |---|---|---|---|---|
-| D: TestClock | `tests/test_testclock.py` | `TestClock.test.ts` sleep, setTime and adjust groups | C | planned |
-| E: Scope, sequential | `tests/test_scope.py` | `Scope.test.ts` sequential variants: interrupted close, direct close after interrupt, masked `closeUnsafe`, throw-then-continue, sole throwing finalizer keeps the failure, the 4 fork tests | A, B | planned |
+| prerequisites | `tests/test_fiber_start_upstream.py` | `Effect.test.ts` :2987 :3013 :3160 :3169, `Fiber.test.ts` :137 :225; source-derived cases (labelled) for forkUnsafe :5614-5637, forkDetach :5728, exit :3873-3889, exitFailCause core.ts:611-624 | — | green: `fork`/`fork_daemon(start_immediately=)`, `exit_` |
+| D: TestClock | `tests/test_testclock.py` | `TestClock.test.ts` sleep, setTime and adjust groups | C, prerequisites | drafted; red only on missing `peffect.testing` (16) |
+| E: Scope, sequential | `tests/test_scope.py` | `Scope.test.ts` sequential variants: interrupted close, direct close after interrupt, masked `closeUnsafe`, throw-then-continue, sole throwing finalizer keeps the failure, the 4 fork tests | A, B, prerequisites | drafted; red only on missing `Scope` (8) and `scoped` (1) |
 | F: Scope with effects | `tests/test_scope_effects.py` | `Effect.test.ts` scoped `:86`, acquireRelease `:1389` `:1407`, scoped failures `:3271`, forkIn `:3038-3071`, forkScoped `:3083-3116`, updateServiceScoped `:5334` `:5345` `:5359`, acquireUseRelease `:322` `:349` `:377` `:2578` `:2598` | E | planned |
 | G: parallel Scope | `tests/test_scope_parallel.py` | `Scope.test.ts` parallel variants (4), `Effect.test.ts:3073`, TestClock "handles multiple sleeps" (needs `forkScoped`) | D, E, F | deferred to tier 3 (D2) |
 
