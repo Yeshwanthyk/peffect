@@ -235,3 +235,18 @@ def test_export_metadata_fails_closed(tmp_path: Path):
         result = subprocess.run([sys.executable, script, target], capture_output=True, text=True)
         assert result.returncode == 2, (declaration, result.stdout, result.stderr)
         assert "__all__" in result.stderr
+
+
+def test_removed_fiber_export_reports_violation_not_traceback(tmp_path: Path):
+    script = tmp_path / "scripts" / "check_boundaries.py"
+    script.parent.mkdir()
+    script.write_bytes(SCRIPT.read_bytes())
+    init = tmp_path / "src" / "peffect" / "__init__.py"
+    init.parent.mkdir(parents=True)
+    init.write_text('from peffect.core import Effect\n__all__ = ["Effect"]\n')
+    target = tmp_path / "probe.py"
+    target.write_text("from peffect.fiber import Fiber\n")
+    result = subprocess.run([sys.executable, script, target], capture_output=True, text=True)
+    assert result.returncode == 1, result.stderr
+    assert result.stderr == ""
+    assert ":1: B1" in result.stdout

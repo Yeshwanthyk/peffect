@@ -88,9 +88,9 @@ observers, exit. (`effect.ts:521-567`)
 | `fork` / `join` / `await_` / `interrupt` | `WithFiber` (child, observers) + `Async` |
 | `all_` / `race` / `timeout` | fork + observers; first failure / first winner interrupts the rest |
 | `Deferred`, `Semaphore`, `Queue` | a waiter list + `Async`; register-and-check is one loop step |
-| Tag lookup | `WithFiber(f -> f.context[tag])` |
-| `Reference` (Clock, log level) | Tag with a default, cached per fiber tree; never in R (`Context.ts:346`) |
-| `provide_context` | `WithFiber` swap + restore frame |
+| Tag lookup | `WithFiber(f -> f.context[tag])`, exact class key; a miss is a `MissingService` defect |
+| `Reference` (Clock, log level) | Tag with a default, built lazily once per Reference class (shared by all runs, as v4 `Context.ts:1091-1096`); never in R |
+| `provide` | kernel `update_context`: swap in a read-only copy and push a `RestoreContext` frame in one step |
 | `Scope` | finalizers get the Exit, run masked in reverse (`effect.ts:4069-4107`) |
 | `Layer[ROut, E, RIn]` | `build(memo, scope)`; MemoMap entry = Deferred + own Scope + observer count (`Layer.ts:253-275`) |
 | `Codec[T, I, RD, RE]` | pydantic parse + optional effectful step; issue tree from `ValidationError` |

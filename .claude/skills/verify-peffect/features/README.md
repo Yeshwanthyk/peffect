@@ -13,6 +13,7 @@ feature by hand, run its command from the repo root.
 | feature | what the user sees | recipe |
 |---|---|---|
 | quickstart | typed failures caught by class, finalizers on failure, interrupt waiting for cleanup | [quickstart.md](quickstart.md) |
+| context | services found by tag, partial provide, a Reference default and override put back, a forked fiber seeing its parent's services | [context.md](context.md) |
 | boundary lint | code outside the kernel that reaches into kernel internals fails the lint, with file and line | [boundary-lint.md](boundary-lint.md) |
 
 **Not covered here:** the fiber protocol under every interleaving (see

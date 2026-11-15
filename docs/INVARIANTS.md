@@ -21,6 +21,7 @@ One owner: the `Fiber`. Nothing else writes these fields except through the meth
 | result | `Fiber._exit` | `Fiber._publish` only |
 | live children | `Fiber.children` | `_start` (add), child `_publish` (discard) |
 | body's exit while children finish | `Fiber._ending` | `Fiber._done` only |
+| services in scope | `Fiber._context` (read-only map; public read via the `context` property) | `Fiber.swap_context` only, called by `update_context` (install) and `RestoreContext.on_any` (put back) |
 
 Derived: `Fiber.exit` (property), `Cause.is_interrupted` etc. Nothing is cached.
 
@@ -84,6 +85,48 @@ call `interrupt_unsafe` on the running fiber: the model includes that as "interr
 | skip loop stops adding `interrupted` | K7: `Failure(Fail('a'))` with no `Interrupt` (pinned `@example`) |
 | old `_done` (wait outside the run loop) | K7: `Success(0)` after an interrupt |
 
+## Context
+
+`update_context(eff, f)` (kernel, `core.py`) and `RestoreContext` own every change to a fiber's
+services; `context.py` (Tag, Reference, Context, `provide`) is built on them and on `WithFiber`.
+
+| id | must stay true | enforced at | proof |
+|---|---|---|---|
+| C1 | **Restored on every exit.** After `update_context(eff, f)` ends (success, failure, defect, interrupt while parked), the fiber's context is the one from before. | `RestoreContext.on_any` (`_pop` runs `on_any` on every popped frame, including skipped ones) | `test_restored_after_success_failure_and_defect`, `test_nested_provide_layers_and_unwinds`, `test_restored_when_interrupted_while_parked_inside` |
+| C2 | **No window.** The swap and the restore frame push happen in one `WithFiber` callback, so no interrupt lands between them; if `f` raises, nothing changed. | `update_context.go` | `test_interrupt_at_install_still_restores` (the interrupt is requested inside `f`, and the test checks the new map was installed and the body never ran), `test_raising_update_changes_nothing` |
+| C3 | **Owned snapshot.** The fiber holds a read-only copy: later writes to the caller's mapping don't show, and the fiber's map, its `context` attribute and its deletion all refuse writes. A forked child starts with the parent's map at fork time and can't change the parent's. | `MappingProxyType(dict(...))` in `update_context`; `Fiber.context` property; `fork` passes `p.context` | `test_fiber_context_is_read_only_and_owned`, `test_child_inherits_context_at_fork_and_cannot_leak_back`, `test_root_starts_empty`; should_fail 12–14 |
+| C4 | **Reference default: once per class, lazy.** Built on first unprovided use, cached in that class's own `__dict__` (never inherited), shared by every fiber and root; an override never builds it. | `Reference._find` | `test_reference_default_built_once_across_roots_and_override_restores` |
+| C5 | **A raising default is a defect and is not cached**; the next use calls it again. | `Reference._find` (the raise escapes before the cache write; `WithFiber` turns it into a defect) | `test_failed_default_is_a_defect_and_not_kept` |
+| C6 | **Concrete tags are final.** Lookup is by exact class, and R is covariant, so a parent-tag context would type-check against a child-tag request it can't answer. Subclassing any tag other than `Tag`/`Reference` raises `TypeError`; `Tag`/`Reference` themselves build no context. | `Tag.__init_subclass__`, `Tag.context` | `test_concrete_tags_cannot_be_subclassed`, `test_base_tags_build_no_context` |
+| C7 | **A `Context[T]` holds a service for every tag in T.** No public constructor (a private token); built only by `Tag.context` and `\|` (right side wins); its `services` view is read-only. Contravariant in T. | `Context.__init__`, `Context.__or__` | `test_context_has_no_public_constructor_and_merges_right_wins`, `test_merged_context_right_side_wins_at_runtime`; should_fail 10–11 |
+| C8 | **A missing service is a `MissingService` defect**, never `None`. With C7 and the R typing, only an `update_context` that drops services can reach it. | `Tag._find` | `test_missing_service_is_a_defect` |
+
+**R typing** (`provide`, two overloads, exact match first). Python has no `Exclude`, so:
+
+| R of the program | after `provide(Context[T])` | pinned by |
+|---|---|---|
+| exactly T, or a part of T | `Never` | should_pass (full, over-provided) |
+| a union naming T's tags plus others | the others | should_pass (partial 2→1→0, overlap) |
+| a bare type variable `R` | `R`, kept (sound, not narrowed) | should_pass `keeps` |
+| `Users \| R` with `Users` provided | `R` | should_pass `subtracts` |
+| still non-empty at `run` / `run_exit` | type error | should_fail 5–7 |
+| wrong service type, wrong Reference override, context claiming more than it holds, forged `Context` | type error | should_fail 8–11 |
+
+**Limits.** Finality (C6) is a runtime check: pyright accepts `class Admins(Users)` and only
+the class statement raises. `Tag[str].context(...)` type-checks and raises at runtime. Overloads
+are checked with pyright only, not mypy. Providing a Reference override leaves R unchanged
+(should_pass, `Level`).
+
+**Sensitivity** (scratch breaks, 2026-11-15, each restored byte-identical): no restore frame
+(6 tests red), swap and frame push in two steps (interrupt-at-install red), no snapshot copy
+(read-only test red), fork drops the context (2), no default cache (2), subclassing allowed (1),
+merge with left side winning (2), public `Context` constructor (1), a miss returns `None` (1); the
+partial overload returning `Never` turns `test_types` red.
+
+**Not in the formal model.** `verify-formal-kernel` does not model context. C1–C8 rest on the
+tests above. Its SKILL.md argues why the model's pass still holds with `RestoreContext` added: the
+frame returns nothing and touches no modeled field.
+
 ## Kernel boundary
 
 Only the kernel (`src/peffect/core.py`, `fiber.py`, `cause.py`, `__init__.py`) knows about fibers
@@ -97,7 +140,7 @@ white-box and exempt.
 |---|---|---|
 | B1 | **Imports are public.** Outside the kernel, a `peffect` name is imported from `peffect`, or from the kernel module that defines it (as re-exported in `__init__.py`: `from peffect.core import Effect`, relative `from .core import Effect`), or is `peffect.core.WithFiber`. Module-qualified kernel imports (`import peffect.core`, `from peffect import core`) and star imports from a kernel module are rejected; import the names. | `scripts/check_boundaries.py` |
 | B2 | **No reach through the module.** `peffect.X` (any alias of the module) names something in `peffect.__all__`. | same |
-| B3 | **Fibers stay opaque.** On a Fiber, code outside the kernel uses only `context`, `await_`, `join`, `interrupt`: the data a service lookup needs, and the three effects the kernel's own tests and the example use to wait on or stop a fiber. Run-loop state (`stack`, `running`, `interrupted`, `interruptible`, `children`, `exit`) and unsafe primitives (`interrupt_unsafe`, `take_interrupt`, `add_observer`) stay inside. This list is a specification: a new public Fiber member is a deliberate edit to `FIBER_PUBLIC`. | same |
+| B3 | **Fibers stay opaque.** On a Fiber, code outside the kernel uses only `context`, `await_`, `join`, `interrupt`: the data a service lookup needs, and the three effects the kernel's own tests and the example use to wait on or stop a fiber. Run-loop state (`stack`, `running`, `interrupted`, `interruptible`, `children`, `exit`) and unsafe primitives (`interrupt_unsafe`, `take_interrupt`, `add_observer`, `swap_context`) stay inside. `context` is a read-only property over a read-only map: assigning or deleting it is a pyright error and an `AttributeError`, writing an item a `TypeError` (`typetests/should_fail.py` 12–14, `test_fiber_context_is_read_only_and_owned`), so the lint checks reads only. This list is a specification: a new public Fiber member is a deliberate edit to `FIBER_PUBLIC`. | same |
 
 **What B3 can see.** A value counts as a Fiber when it is the first parameter of a lambda or a
 named `def` passed to `WithFiber` (or an alias of it, directly or as `f=`), or a parameter

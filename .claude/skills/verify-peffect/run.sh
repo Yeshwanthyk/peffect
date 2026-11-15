@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Verify peffect on its real surface: doctor, the public-API example, the kernel boundary lint,
+# Verify peffect on its real surface: doctor, the public-API examples, the kernel boundary lint,
 # then the full test, lint and type checks. Each step's command, output and exit code are saved.
 #   run.sh        exit 0 = every step passed; 1 = a step failed (doctor failing stops the run)
 # Evidence: $PEFFECT_EVIDENCE/<UTC time>-<pid>/, default base ${TMPDIR:-/tmp}/peffect-verify
@@ -39,6 +39,7 @@ if ! step doctor uv run python -c "$doctor"; then
   exit 1
 fi
 step example uv run python examples/quickstart.py
+step context uv run python examples/context.py
 step boundaries uv run python scripts/check_boundaries.py
 step pytest uv run pytest -q
 step ruff uv run ruff check .

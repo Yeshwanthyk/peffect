@@ -15,11 +15,13 @@ from typing import Any, Generic, Never, TypeVar, final
 from peffect.cause import Cause
 from peffect.core import (
     ANY,
+    EMPTY_CONTEXT,
     ERR,
     OK,
     UNIT,
     AnyEffect,
     Async,
+    ContextMap,
     Effect,
     Exit,
     Failure,
@@ -44,6 +46,7 @@ type Observer = Callable[[Exit[Any, Any]], None]
 @final
 class Fiber(Generic[A_co, E_co]):
     __slots__ = (
+        "_context",
         "_deferred",
         "_ending",
         "_exit",
@@ -52,7 +55,6 @@ class Fiber(Generic[A_co, E_co]):
         "_parent",
         "_parked",
         "children",
-        "context",
         "id",
         "interrupted",
         "interruptible",
@@ -63,12 +65,12 @@ class Fiber(Generic[A_co, E_co]):
     def __init__(
         self,
         loop: asyncio.AbstractEventLoop,
-        context: dict[str, Any],
+        context: ContextMap,
         parent: Fiber[Any, Any] | None = None,
     ) -> None:
         self.id = next(_ids)
         self.stack: list[Frame] = []
-        self.context = context
+        self._context = context
         self.interruptible = True
         self.interrupted: Cause[Never] | None = None
         self.running = False
@@ -83,6 +85,16 @@ class Fiber(Generic[A_co, E_co]):
 
     def __repr__(self) -> str:
         return f"Fiber#{self.id}"
+
+    @property
+    def context(self) -> ContextMap:
+        """The services this fiber sees. Read-only: change it with update_context."""
+        return self._context
+
+    def swap_context(self, context: ContextMap) -> ContextMap:
+        """Kernel only (update_context, RestoreContext): install ``context``, return the old one."""
+        old, self._context = self._context, context
+        return old
 
     # -- the run loop ------------------------------------------------------------------------------
 
@@ -262,7 +274,7 @@ def _await_all(fibers: list[Fiber[Any, Any]]) -> AnyEffect:
 def _start[A, E](
     parent: Fiber[Any, Any] | None,
     eff: Effect[A, E, Any],
-    ctx: dict[str, Any],
+    ctx: ContextMap,
     loop: asyncio.AbstractEventLoop,
 ) -> Fiber[A, E]:
     child: Fiber[A, E] = Fiber(loop, ctx, parent)
@@ -288,7 +300,7 @@ async def run_exit[A, E](eff: Effect[A, E, Never]) -> Exit[A, E]:
     interrupts the fiber and waits for its finalizers before re-raising CancelledError."""
     loop = asyncio.get_running_loop()
     fut: asyncio.Future[Exit[A, E]] = loop.create_future()
-    fiber = _start(None, eff, {}, loop)
+    fiber = _start(None, eff, EMPTY_CONTEXT, loop)
     fiber.add_observer(lambda ex: None if fut.done() else fut.set_result(ex))
     try:
         return await asyncio.shield(fut)

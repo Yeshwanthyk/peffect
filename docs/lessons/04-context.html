@@ -1,0 +1,38 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+:root{color-scheme:light dark}
+body{font-family:var(--font-sans);margin:0}
+.wrap{display:grid;gap:12px}
+h3{margin:4px 0;font-size:15px}
+.txt{font-size:13.5px;line-height:1.5}
+.steps{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.box{border:1px solid var(--border);border-radius:var(--radius);padding:8px 10px;font-size:12.5px;line-height:1.45}
+.box h4{margin:0 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted-foreground)}
+.k{border-color:var(--chart-1)}
+.stack{font-family:var(--font-mono);font-size:11.5px;margin-top:6px}
+.stack div{border:1px solid var(--border);border-radius:5px;padding:2px 6px;margin:2px 0;background:var(--card)}
+.stack .new{border-color:var(--chart-1)}
+code{font-family:var(--font-mono);font-size:11.5px;background:var(--code-background);padding:0 3px;border-radius:3px}
+table{border-collapse:collapse;width:100%;font-size:12px}
+th,td{border:1px solid var(--border);padding:4px 6px;text-align:left;vertical-align:top}
+td.r{color:var(--destructive)} td.g{color:var(--success)}
+</style></head><body><div class="wrap">
+<h3>Lesson 4: services live on the fiber, and come back however the effect ends</h3>
+<div class="txt">A service is looked up by its tag class in the running fiber's context. <code>yield from Users()</code> adds <code>Users</code> to R; <code>provide(Users.context(repo))</code> takes it out. <code>run</code> only accepts R = <code>Never</code>, so a forgotten service is a type error, not a crash at 3am.</div>
+<div class="steps">
+ <div class="box"><h4>1 · before</h4>context <code>{Users: a}</code><div class="stack"><div>…caller frames</div></div></div>
+ <div class="box k"><h4>2 · install (one step)</h4><code>update_context</code> swaps in a read-only copy <code>{Users: b}</code> <b>and</b> pushes the restore frame inside one <code>WithFiber</code> callback. No interrupt can land between them.<div class="stack"><div class="new">RestoreContext({Users: a})</div><div>…caller frames</div></div></div>
+ <div class="box"><h4>3 · body runs</h4>Lookups see <code>b</code>. A fork here copies <code>{Users: b}</code> into the child, which keeps it after the parent leaves.</div>
+ <div class="box k"><h4>4 · any exit</h4>Success, failure, defect or interrupt: <code>_pop</code> runs <code>on_any</code> on the restore frame, even when an interrupt skips it. Context is <code>{Users: a}</code> again.</div>
+</div>
+<table>
+<tr><th>you write</th><th>R</th><th>why</th></tr>
+<tr><td><code>yield from Users()</code></td><td>+ Users</td><td>a Tag: someone must provide it</td></tr>
+<tr><td><code>yield from Level()</code> (a Reference)</td><td>unchanged</td><td>it has a default, built once per class</td></tr>
+<tr><td class="g"><code>provide(Users.context(r) | Log.context(l))(p)</code></td><td>− Users, − Log</td><td>exact match first, then <code>T | R → R</code></td></tr>
+<tr><td><code>provide(ctx)(p)</code> where p's R is a type variable</td><td>kept</td><td>Python has no <code>Exclude</code>; keeping it is sound</td></tr>
+<tr><td class="r"><code>await run(p)</code> with Users left in R</td><td colspan="2">pyright error (should_fail 5–7)</td></tr>
+<tr><td class="r"><code>Context({Users: x}, …)</code>, <code>class Admins(Users)</code>, <code>fiber.context = …</code></td><td colspan="2">refused: no public constructor; concrete tags are final (exact-class lookup); context is read-only</td></tr>
+</table>
+<div class="txt"><b>Why tags are final.</b> R is covariant, so pyright would accept a <code>Users</code> context for a program that asks for <code>Admins(Users)</code>, but the lookup is by exact class and would miss. Python can't forbid the subclass in the type system, so <code>Tag.__init_subclass__</code> raises at the class statement.<br>
+<b>How we know it holds.</b> <code>tests/test_context.py</code> covers rows C1–C8 in <code>docs/INVARIANTS.md</code>; the interrupt-at-install test requests the interrupt inside the install step and checks the new map was really installed. Removing the restore frame, splitting the install into two steps, or dropping the snapshot copy each turns tests red. The TLA+ kernel model does not cover context; the runtime tests do.</div>
+</div></body></html>

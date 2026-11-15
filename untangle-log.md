@@ -52,3 +52,17 @@ Before: none enforced (the rule was prose). After, the lint has six, each on pur
 Both CLI regression tests were red before the correction and green afterwards. Sol's fresh
 structural search found no further tier 1 coupling problem worth fixing. The six policy
 exceptions above are not a measured reduction in special cases.
+
+## Context review corrections
+
+Sol reproduced two dependency-evidence mutation holes in `Context.services` and `provide.ctx`.
+Both now use private storage and getter-only properties. Four runtime replacement/deletion
+probes failed before the fix; negative typing blocks 15–18 also failed the harness before it.
+No new lint rule was needed. The explicit contravariant Context TypeVar and its narrow UP046
+configuration remain: Fable and Sol independently found inferred covariance unsound.
+
+The type harness now recognizes indented numbered blocks; its regression removes each block's
+actual diagnostics in turn and requires rejection. The interrupt-at-install test observes the
+fiber after the real swap; a scratch mutation omitting installation now fails its assertion.
+Verification: `/var/folders/rf/y4ygjrb13bd2nzm69xrc22h40000gn/T/peffect-verify/20261115T155931Z-76623`.
+Upstream test coverage reconciliation remains pending; no broader primitive redesign was made.

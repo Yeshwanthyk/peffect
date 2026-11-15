@@ -186,7 +186,7 @@ class Checker(ast.NodeVisitor):
                     continue
                 if (module, a.name) == ESCAPE_HATCH:
                     return "withfiber"
-                if a.name == "Fiber" and module in ("peffect", self.exports["Fiber"]):
+                if a.name == "Fiber" and module in ("peffect", self.exports.get("Fiber")):
                     return "fibertype"
             return "other"
         if isinstance(binding, ast.Assign) and isinstance(binding.value, ast.Name):

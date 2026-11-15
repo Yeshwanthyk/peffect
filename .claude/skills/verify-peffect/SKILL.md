@@ -1,6 +1,6 @@
 ---
 name: verify-peffect
-description: Prove peffect works as a library a user imports. Runs the public-API example, the kernel boundary lint, and the full pytest, ruff and pyright checks, saving each step's output. Run before calling any peffect change done, and after adding a module outside the kernel.
+description: Prove peffect works as a library a user imports. Runs the public-API examples, the kernel boundary lint, and the full pytest, ruff and pyright checks, saving each step's output. Run before calling any peffect change done, and after adding a module outside the kernel.
 ---
 
 # verify-peffect
@@ -29,7 +29,8 @@ driven and the run exits 1.
 .claude/skills/verify-peffect/run.sh
 ```
 
-Steps, in order: `doctor`, `example` (`examples/quickstart.py`), `boundaries`
+Steps, in order: `doctor`, `example` (`examples/quickstart.py`), `context`
+(`examples/context.py`), `boundaries`
 (`scripts/check_boundaries.py` on `src/peffect` outside the kernel, and `examples/`), `pytest`
 (all tests, including the boundary probes in `tests/test_boundaries.py`), `ruff check .`, and
 `pyright`. A failing step doesn't stop the later ones, so one run shows every failure.

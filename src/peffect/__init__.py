@@ -1,7 +1,9 @@
 """peffect: Effect-style programs for Python. See docs/DESIGN.md."""
 
 from peffect.cause import Cause, Die, Fail, FailureError, Interrupt, Interrupted
+from peffect.context import Context, MissingService, Reference, Tag, provide
 from peffect.core import (
+    ContextMap,
     Do,
     Effect,
     Exit,
@@ -27,12 +29,15 @@ from peffect.core import (
     sync,
     uninterruptible,
     uninterruptible_mask,
+    update_context,
     yield_now,
 )
 from peffect.fiber import Fiber, fork, fork_daemon, run, run_exit
 
 __all__ = [
     "Cause",
+    "Context",
+    "ContextMap",
     "Die",
     "Do",
     "Effect",
@@ -43,7 +48,10 @@ __all__ = [
     "Fiber",
     "Interrupt",
     "Interrupted",
+    "MissingService",
+    "Reference",
     "Success",
+    "Tag",
     "async_",
     "attempt",
     "catch_all",
@@ -60,6 +68,7 @@ __all__ = [
     "interruptible",
     "never",
     "on_exit",
+    "provide",
     "run",
     "run_exit",
     "sleep",
@@ -68,5 +77,6 @@ __all__ = [
     "sync",
     "uninterruptible",
     "uninterruptible_mask",
+    "update_context",
     "yield_now",
 ]

@@ -8,9 +8,8 @@ imports the public Effect API plus at most `core.withFiber`. peffect has the sam
 itself.
 
 Enforced, not hoped for: `scripts/check_boundaries.py` fails when code outside the kernel imports a
-kernel-internal name, reaches through the `peffect` module, or touches a `Fiber` member other than
-`context`, `await_`, `join` and `interrupt` (rules B1–B3 in `docs/INVARIANTS.md`). `WithFiber` is
-the one escape hatch.
+kernel-internal name, reaches through the `peffect` module, or touches a `Fiber` member outside the
+list in rule B3 (rules B1–B3 in `docs/INVARIANTS.md`). `WithFiber` is the one escape hatch.
 
 ## Tiers
 
@@ -18,7 +17,7 @@ the one escape hatch.
 |---|---|---|---|---|---|
 | 0 ✓ | kernel: Effect, Exit, Cause, Fiber, fork, masks, gen | internal/core.ts, effect.ts | `core`, `fiber`, `cause` | — | K1–K10 props + `verify-formal-kernel` |
 | 1 ✓ | verify skill + agent guide skeleton, boundary lint | — | `.claude/skills/verify-peffect/`, `AGENTS.md`, `scripts/check_boundaries.py` | — | the skill drives `examples/quickstart.py` end to end; boundary probes red/green |
-| 2 | Context, Tag, Reference, `provide` | Context.ts (1,397), References.ts | `context.py` | `WithFiber` + restore frame | R-typing typetests: a missing service is a type error |
+| 2 (impl) | Context, Tag, Reference, `provide` | Context.ts (1,397), References.ts | `context.py` | kernel `update_context` (swap + `RestoreContext` frame in one step) | R-typing typetests: a missing service is a type error; C1–C8 tests |
 | 2 | Clock as a Reference, TestClock | Clock.ts (333) | `clock.py`, `testing.py` | Reference + `Async` | `sleep` under TestClock never touches the loop timer |
 | 2 | Scope | Scope.ts (573) | `scope.py` | finalizers run masked, reverse order, get the Exit | prop: every added finalizer runs once, in reverse |
 | 3 | Deferred, Latch | Deferred.ts (946), Latch.ts (394) | `deferred.py` | waiter list + `Async` | formal: waiter-list model (no lost wakeup, interrupted waiter leaves the list) |
@@ -41,6 +40,10 @@ an AGENTS.md section with the idiom and the mistakes it prevents.
 - Tier 1 (2026-11-15): accepted after independent Sol 6.1 verification and structure-review; two checker findings corrected and regression-tested (31 tests). `examples/quickstart.py`,
   `verify-peffect`, `AGENTS.md`, the boundary lint with its probes (B1–B3), and lesson 03.
   Marked ✓ once the independent review passes.
+- Tier 2a, Context (2026-11-15): implemented, awaiting independent review. `context.py`, kernel
+  `update_context` + `RestoreContext`, read-only `Fiber.context`, `examples/context.py` in
+  `verify-peffect`, rows C1–C8, lesson 04. Clock/TestClock and Scope (the rest of tier 2) are
+  not started.
 
 ## Order and why
 

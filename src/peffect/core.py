@@ -26,8 +26,9 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from collections.abc import Awaitable, Callable, Generator
+from collections.abc import Awaitable, Callable, Generator, Mapping
 from functools import wraps
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, Never, TypeVar, cast, final, overload
 
 from peffect.cause import Cause
@@ -41,6 +42,10 @@ R_co = TypeVar("R_co", covariant=True)
 
 type AnyEffect = Effect[Any, Any, Any]
 type AnyFiber = Fiber[Any, Any]
+type ContextMap = Mapping[object, Any]
+"""A fiber's services, keyed by tag class. Read-only: update_context installs a fresh copy."""
+
+EMPTY_CONTEXT: ContextMap = MappingProxyType({})
 
 
 class Effect(Generic[A_co, E_co, R_co]):
@@ -379,6 +384,23 @@ RESTORE_UNINTERRUPTIBLE = SetInterruptible(False)
 
 
 @final
+class RestoreContext(Frame):
+    """Put back the context from before update_context, however the effect ends (on_any runs
+    on success, failure, and when an interrupt skips the frame)."""
+
+    __slots__ = ("context",)
+    kind = ANY
+    restoring = True
+
+    def __init__(self, context: ContextMap) -> None:
+        self.context = context
+
+    def on_any(self, fiber: AnyFiber, ok: bool) -> AnyEffect | None:
+        fiber.swap_context(self.context)
+        return None
+
+
+@final
 class _AsyncCancel(Frame):
     """Sits under a parked Async. If the fiber is interrupted while parked, run the cancel effect
     (masked) before the interrupt continues upward. Passes successes straight through."""
@@ -588,6 +610,31 @@ def uninterruptible_mask[A, E, R](body: Callable[[Restore], Effect[A, E, R]]) ->
             fiber.interruptible = False
             fiber.stack.append(RESTORE_INTERRUPTIBLE)
         return body(Restore(was))
+
+    return WithFiber(go)
+
+
+# ================================================================================================
+# Context
+# ================================================================================================
+
+
+def update_context[A, E, R](
+    eff: Effect[A, E, R], f: Callable[[ContextMap], ContextMap]
+) -> Effect[A, E, R]:
+    """Run ``eff`` with the context ``f(current)``; the current one comes back on every exit.
+
+    The new context is a read-only copy of what f returns, so changing that mapping later can't
+    reach the fiber. Swap and restore frame happen in one step, like ``uninterruptible``: no
+    interrupt can land between them. If f raises, nothing changed and the raise is a defect.
+    R is unchanged; context.provide is what removes services from R.
+    Effect v4: internal/effect.ts:2269-2293 (updateContext).
+    """
+
+    def go(fiber: AnyFiber) -> AnyEffect:
+        old = fiber.swap_context(MappingProxyType(dict(f(fiber.context))))
+        fiber.stack.append(RestoreContext(old))
+        return eff
 
     return WithFiber(go)
 

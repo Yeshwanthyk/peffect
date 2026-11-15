@@ -21,9 +21,17 @@ interrupter. The model is `FiberKernel.tla`. The same promises are tested on the
 | `Done`, `AwaitPark` | `Fiber._done` (`_ending`, interrupt children), `_await_all`, `_publish`, `add_observer` |
 | `Eval` "fork" | `fiber._start` via `fork` |
 
-**Sync:** the repo has no commits yet. The model was confirmed against `fiber.py`
-sha256 `c00ddbe36bf2…` and `core.py` sha256 `47fbc2264f69…` (2026-11-15). After the first
-commit, replace these with that commit's hash. A change to any symbol in the table, or new code that writes
+**Not modeled: context.** The model has no context state. `update_context`, `RestoreContext`,
+`Fiber.swap_context` and the context a fork passes on are proven by `tests/test_context.py`
+(restore on success, failure, interrupt and interrupt-at-install; fork snapshot), not here.
+Why the model's pass still means something with them added (an argument, not a check):
+`RestoreContext.on_any` returns nothing and touches no field in this table, so it neither delivers
+nor holds back an interrupt, and the model's "the interrupt unwinds to the top" still describes
+the code.
+
+**Sync:** the model was confirmed against `fiber.py` sha256 `0908880415af…` and `core.py` sha256
+`630c8d74847d…` (2026-11-15, the Context change on top of commit `f76c304`). Replace these with a
+commit hash once the Context change is committed. A change to any symbol in the table, or new code that writes
 `_deferred`, `_parked`, `Park.done`, `_exit`, `children` or `interruptible`, means the model
 needs another look before its pass means anything.
 
