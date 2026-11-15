@@ -4,6 +4,8 @@ from typing import Any, Never, assert_type
 
 from peffect import (
     Cause,
+    Clock,
+    ClockService,
     Context,
     Effect,
     Exit,
@@ -12,6 +14,8 @@ from peffect import (
     Tag,
     catch_all,
     catch_tag,
+    clock_with,
+    current_time_millis,
     ensuring,
     fail,
     fork,
@@ -19,6 +23,7 @@ from peffect import (
     on_error,
     on_interrupt,
     provide,
+    sleep,
     succeed,
     sync,
 )
@@ -143,3 +148,41 @@ def keeps[R](eff: Effect[int, Never, R]) -> Effect[int, Never, R]:
 
 def subtracts[R](eff: Effect[int, Never, Users | R]) -> Effect[int, Never, R]:
     return provide(Users.context(Repo()))(eff)
+
+
+# Clock: a Reference, so reading it adds nothing to R; clock_with keeps f's E and R
+assert_type(Clock().use(), Effect[ClockService, Never, Never])
+assert_type(clock_with(lambda _: find(1)), Effect[str, NotFound, Never])
+assert_type(clock_with(lambda _: needs_two()), Effect[Pair, Never, Users | Log])
+assert_type(current_time_millis, Effect[int, Never, Never])
+assert_type(sleep(0.5), Effect[None, Never, Never])
+
+
+class FixedClock:
+    def current_time_millis_unsafe(self) -> int:
+        return 0
+
+    def current_time_nanos_unsafe(self) -> int:
+        return 0
+
+    def monotonic_time_nanos_unsafe(self) -> int:
+        return 0
+
+    @property
+    def current_time_millis(self) -> Effect[int, Never, Never]:
+        return succeed(0)
+
+    @property
+    def current_time_nanos(self) -> Effect[int, Never, Never]:
+        return succeed(0)
+
+    @property
+    def monotonic_time_nanos(self) -> Effect[int, Never, Never]:
+        return succeed(0)
+
+    def sleep(self, seconds: float) -> Effect[None, Never, Never]:
+        return succeed(None)
+
+
+fixed: ClockService = FixedClock()  # structural: any class with the members is a ClockService
+assert_type(provide(Clock.context(fixed))(sleep(1)), Effect[None, Never, Never])

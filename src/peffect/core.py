@@ -507,14 +507,6 @@ yield_now: Effect[None, Never, Never] = YieldNow()
 never: Effect[Never, Never, Never] = Async(lambda _resume: None)
 
 
-def sleep(seconds: float) -> Effect[None, Never, Never]:
-    def register(resume: Resume[None, Never, Never]) -> AnyEffect:
-        handle = asyncio.get_running_loop().call_later(seconds, resume, UNIT)
-        return Sync(handle.cancel)
-
-    return Async(register)
-
-
 def attempt[A, X: BaseException](
     thunk: Callable[[], A] | Callable[[], Awaitable[A]],
     catch: type[X] | tuple[type[X], ...] = (),

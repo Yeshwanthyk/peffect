@@ -40,6 +40,7 @@ if ! step doctor uv run python -c "$doctor"; then
 fi
 step example uv run python examples/quickstart.py
 step context uv run python examples/context.py
+step clock uv run python examples/clock.py
 step boundaries uv run python scripts/check_boundaries.py
 step pytest uv run pytest -q
 step ruff uv run ruff check .

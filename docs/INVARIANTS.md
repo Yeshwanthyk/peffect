@@ -129,6 +129,22 @@ partial overload returning `Never` turns `test_types` red.
 tests above. Its SKILL.md argues why the model's pass still holds with `RestoreContext` added: the
 frame returns nothing and touches no modeled field.
 
+## Clock
+
+`src/peffect/clock.py`, a leaf: it imports `Reference` and the public `async_`, and the kernel
+does not import it. Upstream: `internal/effect.ts:6395-6486`.
+
+| # | Invariant | Enforced by | Pinned by |
+|---|---|---|---|
+| CL1 | **Sleep goes through the fiber's Clock.** `sleep(s)` is `clock_with(lambda c: c.sleep(s))`; a provided Clock replaces the live timer for everything inside its `provide`. | `clock.sleep`, `clock_with` | `test_sleep_uses_the_provided_clock`, `examples/clock.py` |
+| CL2 | **Non-positive or NaN is a yield, with no timer.** NaN follows `Duration.make` (Duration.ts:465: NaN becomes zero) and then `sleepMillis` (`<= 0` yields, effect.ts:6419). | `_LiveClock.sleep` | `test_a_non_positive_sleep_is_a_yield_without_a_timer[0, -1]` |
+| CL3 | **Infinite parks with no timer** until interrupted (effect.ts:6420). | `_LiveClock.sleep` returns `never` | `test_an_infinite_sleep_parks_without_a_timer_until_interrupted` |
+| CL4 | **Interrupting a finite sleep cancels its timer** (`clearTimeout`, effect.ts:6421-6427). | `async_` cancel effect runs `handle.cancel` | `test_interrupting_a_finite_sleep_clears_its_timer` |
+| CL5 | **Wall nanos stay within 1s of wall time.** Monotonic plus a module-level origin, re-anchored when the skew is strictly greater than 1e9 ns; wall time is whole milliseconds like `Date.now()`. Integer arithmetic only. | `_wall_nanos` | `test_keeps_wall_time_aligned_while_exposing_the_monotonic_source` |
+
+**Not in the formal model.** `verify-formal-kernel` models no clock. Moving `sleep` out of
+`core.py` changed no kernel node: it was already `async_` plus `call_later`, and still is.
+
 ## Kernel boundary
 
 Only the kernel (`src/peffect/core.py`, `fiber.py`, `cause.py`, `__init__.py`) knows about fibers

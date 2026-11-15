@@ -6,25 +6,16 @@ Adaptations:
   `process.hrtime.bigint` (monotonic, nanoseconds). Python's sources are `time.time_ns` and
   `time.monotonic_ns`, both int nanoseconds, so they are the stubs (pytest's monkeypatch
   replaces vitest's spyOn/mockRestore). The wall stub returns whole milliseconds, as Date.now does.
-- `Clock` is looked up when the test runs (`upcoming`), so until it exists the test fails with
-  AttributeError rather than stopping the file from importing.
 - Upstream reads the clock with `yield* Clock.Clock` inside `it.live`; here `Clock().use()` runs
   with nothing provided, so the default (live) clock answers. All asserts use the clock's
   synchronous `*_unsafe` reads, as upstream's do.
 """
 
 import time
-from typing import Any
 
 import pytest
 
-import peffect
-from peffect import run
-
-
-def upcoming(name: str) -> Any:
-    """A public name upstream has and peffect doesn't yet: AttributeError until it does."""
-    return getattr(peffect, name)
+from peffect import Clock, run
 
 
 async def test_keeps_wall_time_aligned_while_exposing_the_monotonic_source(
@@ -34,8 +25,7 @@ async def test_keeps_wall_time_aligned_while_exposing_the_monotonic_source(
     now = {"wall_millis": 1_000_000, "monotonic_nanos": 5_000_000_000}
     monkeypatch.setattr(time, "time_ns", lambda: now["wall_millis"] * 1_000_000)
     monkeypatch.setattr(time, "monotonic_ns", lambda: now["monotonic_nanos"])
-    clock_tag = upcoming("Clock")
-    clock = await run(clock_tag().use())
+    clock = await run(Clock().use())
     nanos_per_milli = 1_000_000
 
     assert clock.current_time_nanos_unsafe() == now["wall_millis"] * nanos_per_milli

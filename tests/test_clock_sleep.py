@@ -15,18 +15,16 @@ Adaptations:
 - The timer is observed by spying on the running loop's `call_later`. The harness itself
   registers no timer: it advances the loop only with `asyncio.sleep(0)`, which CPython runs
   without `call_later`. So every recorded timer is one `sleep` registered.
-- `Clock` doesn't exist yet: the one case that needs it looks it up inside the test, so it alone
-  fails with AttributeError.
 """
 
 import asyncio
 import math
-from typing import Any
+from typing import Any, Never
 
 import pytest
 
-import peffect
 from peffect import (
+    Clock,
     Effect,
     Exit,
     Failure,
@@ -98,7 +96,7 @@ async def test_a_non_positive_sleep_is_a_yield_without_a_timer(timers: TimerSpy,
 
 async def test_an_infinite_sleep_parks_without_a_timer_until_interrupted(timers: TimerSpy):
     """effect.ts:6420 `else if (!Number.isFinite(millis)) return never`."""
-    fiber: Fiber[None, Any] = await run(fork_daemon(sleep(math.inf)))
+    fiber: Fiber[None, Never] = await run(fork_daemon(sleep(math.inf)))
     await ticks()
 
     assert fiber.exit is None  # still parked
@@ -111,7 +109,7 @@ async def test_an_infinite_sleep_parks_without_a_timer_until_interrupted(timers:
 
 async def test_interrupting_a_finite_sleep_clears_its_timer(timers: TimerSpy):
     """effect.ts:6421-6427: `setTimeout(...)`, and the returned `clearTimeout` runs on interrupt."""
-    fiber: Fiber[None, Any] = await run(fork_daemon(sleep(5)))
+    fiber: Fiber[None, Never] = await run(fork_daemon(sleep(5)))
     await ticks()
 
     assert fiber.exit is None
@@ -141,30 +139,35 @@ class RecordingClock:
         return 0
 
     @property
-    def current_time_millis(self) -> Effect[int, Any, Any]:
+    def current_time_millis(self) -> Effect[int, Never, Never]:
         return succeed(0)
 
     @property
-    def current_time_nanos(self) -> Effect[int, Any, Any]:
+    def current_time_nanos(self) -> Effect[int, Never, Never]:
         return succeed(0)
 
     @property
-    def monotonic_time_nanos(self) -> Effect[int, Any, Any]:
+    def monotonic_time_nanos(self) -> Effect[int, Never, Never]:
         return succeed(0)
 
-    def sleep(self, seconds: float) -> Effect[None, Any, Any]:
+    def sleep(self, seconds: float) -> Effect[None, Never, Never]:
         return sync(lambda: self.slept.append(seconds))
 
 
 async def test_sleep_uses_the_provided_clock(timers: TimerSpy):
     """effect.ts:6476 `sleep = clockWith((clock) => clock.sleep(duration))`: the Clock in the
     fiber's context does the sleeping, so a provided one replaces the live timer."""
-    missing = "Clock"  # not in peffect yet: AttributeError until it is
-    clock_ref: Any = getattr(peffect, missing)
     recording = RecordingClock()
 
-    ex = await run_exit(provide(clock_ref.context(recording))(sleep(5)))
+    ex = await run_exit(provide(Clock.context(recording))(sleep(5)))
 
     assert isinstance(ex, Success)
     assert recording.slept == [5]
     assert timers.timers == []
+
+
+async def test_nan_is_normalized_before_dispatch_to_a_provided_clock():
+    """effect.ts:6477 + Duration.ts:465: normalization precedes the service call."""
+    recording = RecordingClock()
+    await run(provide(Clock.context(recording))(sleep(float("nan"))))
+    assert recording.slept == [0.0]

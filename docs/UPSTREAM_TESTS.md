@@ -67,9 +67,23 @@ Old expectations changed to upstream's, each because election now applies:
 
 | Upstream | Python test | Status |
 |---|---|---|
-| Clock.test.ts:5 keeps wall time aligned while exposing the monotonic source | `test_keeps_wall_time_aligned_while_exposing_the_monotonic_source` | red: missing API (`Clock`) |
+| Clock.test.ts:5 keeps wall time aligned while exposing the monotonic source | `test_keeps_wall_time_aligned_while_exposing_the_monotonic_source` | green (was red: missing API `Clock`) |
 
 `time.time_ns` and `time.monotonic_ns` are monkeypatched in place of `Date.now` and `process.hrtime.bigint`.
+
+Source-derived sleep contracts, `tests/test_clock_sleep.py`: no upstream test outside TestClock
+pins these, so each case cites `internal/effect.ts` (CL1-CL4 in INVARIANTS). All green.
+
+| Source | Python test |
+|---|---|
+| :6476 `sleep = clockWith(c => c.sleep(d))` | `test_sleep_uses_the_provided_clock` |
+| :6419 `millis <= 0` yields | `test_a_non_positive_sleep_is_a_yield_without_a_timer[0, -1]` |
+| :6420 non-finite is `never` | `test_an_infinite_sleep_parks_without_a_timer_until_interrupted` |
+| :6421-6427 `setTimeout` / `clearTimeout` | `test_interrupting_a_finite_sleep_clears_its_timer` |
+
+NaN: `sleep(nan)` yields, like 0. Decided from `Duration.make` (Duration.ts:465), which turns NaN
+into zero before `sleepMillis` sees it; `sleepMillis` alone would send NaN to `never`
+(`!isFinite`). No test pins it. `-inf` yields: `toMillis` gives `-Infinity`, which is `<= 0`.
 
 ## Batches D–G: planned
 
@@ -104,3 +118,9 @@ upstream tests before being claimed. No cross-call result cache is kept for muta
 Sol confirmed finalization semantics and 69 tests before these equality regressions were added.
 The formal Sync note now names the committed Context baseline and explicitly excludes finalizer
 body/cause semantics from its proof.
+
+Clock review correction: `sleep(NaN)` now normalizes to zero before dispatching to a provided
+Clock, matching Duration.make's position before the service boundary. The recording-clock test
+failed before this correction and passes after it. Sol's other Clock probes passed. Parent reran
+78 tests excluding the still-unimplemented TestClock draft, plus ruff and pyright successfully.
+This does not establish full Duration input parity.

@@ -56,6 +56,13 @@ Mistakes this prevents (rows C1–C8 in `docs/INVARIANTS.md`):
 - To change the context, use `provide` or `update_context`: both put the old one back however
   the effect ends, including an interrupt.
 
+## Time (Clock, sleep)
+
+Read time and sleep through `current_time_millis` / `sleep`, never `time.time()` or
+`asyncio.sleep` inside an effect: those bypass the fiber's Clock, so a provided Clock (and later
+TestClock) can't control them. Swap time with `provide(Clock.context(my_clock))`; `my_clock` only
+needs the `ClockService` members. Rows CL1–CL5 in `docs/INVARIANTS.md`.
+
 ## Conventions
 
 - Leave `@gen` bodies unannotated so pyright infers `Effect[A, E, R]` from the yields; ruff's

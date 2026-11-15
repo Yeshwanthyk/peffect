@@ -1,6 +1,15 @@
 """peffect: Effect-style programs for Python. See docs/DESIGN.md."""
 
 from peffect.cause import Cause, DefectError, Die, Fail, FailureError, Interrupt, Interrupted
+from peffect.clock import (
+    Clock,
+    ClockService,
+    clock_with,
+    current_time_millis,
+    current_time_nanos,
+    monotonic_time_nanos,
+    sleep,
+)
 from peffect.context import Context, MissingService, Reference, Tag, provide
 from peffect.core import (
     ContextMap,
@@ -25,7 +34,6 @@ from peffect.core import (
     on_error,
     on_exit,
     on_interrupt,
-    sleep,
     succeed,
     suspend,
     sync,
@@ -38,6 +46,8 @@ from peffect.fiber import Fiber, fork, fork_daemon, run, run_exit
 
 __all__ = [
     "Cause",
+    "Clock",
+    "ClockService",
     "Context",
     "ContextMap",
     "DefectError",
@@ -60,6 +70,9 @@ __all__ = [
     "catch_all",
     "catch_cause",
     "catch_tag",
+    "clock_with",
+    "current_time_millis",
+    "current_time_nanos",
     "die",
     "ensuring",
     "fail",
@@ -69,6 +82,7 @@ __all__ = [
     "from_async",
     "gen",
     "interruptible",
+    "monotonic_time_nanos",
     "never",
     "on_error",
     "on_exit",

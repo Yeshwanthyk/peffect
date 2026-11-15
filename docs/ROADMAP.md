@@ -40,13 +40,17 @@ an AGENTS.md section with the idiom and the mistakes it prevents.
 - Tier 1 (2026-11-15): accepted after independent Sol 6.1 verification and structure-review; two checker findings corrected and regression-tested (31 tests). `examples/quickstart.py`,
   `verify-peffect`, `AGENTS.md`, the boundary lint with its probes (B1–B3), and lesson 03.
   Marked ✓ once the independent review passes.
-- Tier 2a, Context (2026-11-15): implemented, awaiting independent review. `context.py`, kernel
+- Tier 2a, Context (2026-11-15): independently reviewed; known parity gaps below. `context.py`, kernel
   `update_context` + `RestoreContext`, read-only `Fiber.context`, `examples/context.py` in
   `verify-peffect`, rows C1–C8, lesson 04.
 - Tier 2a, upstream test port (2026-11-15): batches A (Context) and B (kernel finalization) from
   `docs/UPSTREAM_TESTS.md` pass: `Context.empty`, Context equality (C9), `on_error`,
   `on_interrupt`, and `on_exit` keeping the body's failure with defect election (K9). Batch C
-  (Clock) is ported and red until Clock lands; TestClock (D) and Scope (E–G) are not started.
+  (Clock) is ported; TestClock (D) and Scope (E–G) are not started.
+- Tier 2b, Clock (2026-11-15): independently reviewed; seconds-only API remains incomplete. Leaf `clock.py` (`Clock` Reference,
+  `ClockService` Protocol, `clock_with`, time reads, `sleep` moved out of `core.py`), batch C and
+  the source-derived sleep tests green, `examples/clock.py` in `verify-peffect`, rows CL1–CL5,
+  lesson 05. TestClock is the remaining half of this roadmap row.
 
 ## Order and why
 
@@ -71,3 +75,16 @@ an AGENTS.md section with the idiom and the mistakes it prevents.
 | Stream: port Channel, or build Stream on Pull + Queue directly | Pull + Queue; add Channel only if operators need it | tier 7 |
 | Codec: pydantic-only, or an Effect-style transformation layer on top | pydantic + optional effectful step | tier 6 |
 | Runtimes other than asyncio (trio via anyio) | asyncio only | none yet |
+
+## Fidelity gate (2026-11-15)
+
+User requires a faithful port: documentation of a deviation is not acceptance of parity.
+Known gaps to reconcile before calling the port faithful: class-only service identity versus
+upstream string keys, incomplete Equal protocols, and seconds-only Clock inputs versus Duration
+normalization and precision. Preserve observable upstream behavior; Python syntax/platform
+adaptations must be distinguished from semantic omissions.
+
+TestClock tests are drafted, not accepted as a complete contract yet. Port Scope and scheduler
+tracking prerequisites before TestClock implementation. Keep upstream make's Scope requirement;
+never replace scheduler settling with a fixed yield count. Upstream-required dependencies may
+move ahead of their original roadmap tier rather than being recreated inside TestClock.
