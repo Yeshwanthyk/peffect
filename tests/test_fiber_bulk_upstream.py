@@ -12,12 +12,12 @@ Test-owned gates are opened in ensuring on assertion failure to avoid stranding 
 Await-all captures target failures as Exits; its own external interruption is not caught.
 """
 
-from collections.abc import Callable
-from typing import Any, Never, cast
+import asyncio
+from collections.abc import Callable, Iterator
+from typing import Any, Never
 
 import pytest
 
-import peffect
 from peffect import (
     Cause,
     Deferred,
@@ -27,11 +27,14 @@ from peffect import (
     Fiber,
     Interrupt,
     Success,
+    await_all,
     ensuring,
     fail,
     fail_cause,
     fork,
+    fork_daemon,
     gen,
+    interrupt_all,
     never,
     on_interrupt,
     run,
@@ -40,10 +43,6 @@ from peffect import (
     uninterruptible,
 )
 from peffect.core import WithFiber
-
-
-def _api(name: str) -> Callable[..., Effect[Any, Any, Any]]:
-    return cast(Callable[..., Effect[Any, Any, Any]], getattr(peffect, name))
 
 
 def observer_count(fiber: Fiber[Any, Any], field: str = "_observers") -> int:
@@ -98,7 +97,6 @@ async def test_stops_notifying_an_observer_once_it_is_removed():
 
 async def test_interrupt_all_awaits_fibers_passed_as_a_one_shot_iterable():
     """Fiber.test.ts:90: original cleaned assertion, with Deferred for the single latch opening."""
-    interrupt_all = _api("interrupt_all")
     gate = Deferred[None].make_unsafe()
     flags = {"cleaned": False}
 
@@ -120,7 +118,6 @@ async def test_interrupt_all_awaits_fibers_passed_as_a_one_shot_iterable():
 
 async def test_source_await_all_returns_ordered_exits_including_failures_and_interruptions():
     """internal/effect.ts:876-908: walk one iterator, append each Exit in input order."""
-    await_all = _api("await_all")
     gate = Deferred[None].make_unsafe()
 
     @gen
@@ -145,7 +142,6 @@ async def test_source_await_all_returns_ordered_exits_including_failures_and_int
 async def test_source_await_all_external_interruption_removes_its_observer_not_the_workers():
     """internal/effect.ts:889-908: cancellation removes the current subscription. It does not
     turn the awaiting fiber's external interruption into a successful list of target Exits."""
-    await_all = _api("await_all")
     gate = Deferred[None].make_unsafe()
 
     @gen
@@ -170,7 +166,6 @@ async def test_source_await_all_external_interruption_removes_its_observer_not_t
 
 async def test_source_interrupt_all_signals_every_worker_before_waiting_for_cleanup():
     """internal/effect.ts:992-1003: signal and collect all targets, then fiberAwaitAll."""
-    interrupt_all = _api("interrupt_all")
     release = Deferred[None].make_unsafe()
     cleaned: list[int] = []
 
@@ -214,7 +209,7 @@ async def test_source_worker_interruptibility_is_inherited_only_when_explicit(
 ):
     """internal/effect.ts:5614-5637, :5663: explicit inherit copies the parent's mask; the
     default remains interruptible, even when fork runs under an uninterruptible caller."""
-    forker = _api(fork_name)
+    forker = fork if fork_name == "fork" else fork_daemon
     read_status = WithFiber(lambda fiber: succeed(fiber.interruptible))
 
     @gen
@@ -228,3 +223,32 @@ async def test_source_worker_interruptibility_is_inherited_only_when_explicit(
         assert (yield from child.join()) is expected
 
     await run(program())
+
+
+async def test_iterator_failure_after_pending_target_does_not_corrupt_its_exit():
+    """Python regression: iterator errors belong to the waiter, never its target.
+
+    Unlike the upstream callback hazard, Python's run loop can catch an escaping
+    observer exception as a second target completion. Keep the exception inside await_all.
+    """
+    gate = Deferred[int, Never].make_unsafe()
+    target = await run(fork_daemon(gate.await_(), start_immediately=True))
+    observed: list[Exit[int, Never]] = []
+    target.add_observer(observed.append)
+    error = ValueError("iterator failed after pending target")
+
+    def source() -> Iterator[Fiber[int, Never]]:
+        yield target
+        raise error
+
+    waiter = await run(fork_daemon(await_all(source()), start_immediately=True))
+    await run(gate.succeed(7))
+    try:
+        result = await asyncio.wait_for(run(waiter.await_()), timeout=1)
+        assert isinstance(result, Failure)
+        assert result.cause.defects == [error]
+        assert isinstance(target.exit, Success)
+        assert target.exit.value == 7
+        assert observed == [target.exit]
+    finally:
+        await run(waiter.interrupt())

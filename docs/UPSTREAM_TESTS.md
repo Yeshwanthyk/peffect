@@ -179,3 +179,22 @@ Fiber.awaitAll/timeoutOption/TestClock.adjust(1000); it does not establish virtu
 Python schedules resumed fibers, so a white-box callback test independently checks clearing
 before synchronous notification. No Deferred fallback, skipped test or suppression is used.
 complete/completeWith, polling and the remaining convenience wrappers are not ported.
+
+
+## Fiber bulk prerequisites — `tests/test_fiber_bulk_upstream.py`
+
+Twelve cases: `Fiber.test.ts:32` (observer self-cancellation during publication), `:49`
+(removed observer stays removed), `:90` (interruptAll awaits a one-shot iterable), plus labelled
+source-derived ordered Exits / removable current observer (`internal/effect.ts:876-908`),
+signal-all-before-wait and caller interruptor id (`:992-1003`), and explicit/default inheritance
+for both fork APIs (`:5614-5637, :5663`). Observer ports await actual Python fiber termination
+before the original array assertion; Deferred replaces only the single latch opening.
+
+Typed migration preserves all 19 original assertion ASTs. Thirteen tests pass, including a
+Python-specific regression for an iterator raising after a pending target completes; targeted mutations fail
+on sequential signaling, omitted cancellation cleanup, ignored inheritance and inherited defaults.
+Additional scratch probes cover scheduled startup, empty inputs, unsupported options and 10,000
+already-completed fibers without recursive waiting. Bulk semantics are not formally modeled;
+the extended kernel model checks inherited startup plus existing protocol properties. Independent
+Sol review found an escaping iterator callback exception; the correction and regression passed
+a fresh independent recheck. Iterator failures become waiter defects without altering target Exits.

@@ -45,7 +45,7 @@ from peffect.core import (
     yield_now,
 )
 from peffect.deferred import Deferred
-from peffect.fiber import Fiber, fork, fork_daemon, run, run_exit
+from peffect.fiber import Fiber, await_all, fork, fork_daemon, interrupt_all, run, run_exit
 from peffect.resources import acquire_release, acquire_use_release, add_finalizer
 from peffect.scope import Closeable, Scope, ScopeService, scope, scoped
 
@@ -79,6 +79,7 @@ __all__ = [
     "add_finalizer",
     "async_",
     "attempt",
+    "await_all",
     "catch_all",
     "catch_cause",
     "catch_tag",
@@ -95,6 +96,7 @@ __all__ = [
     "fork_daemon",
     "from_async",
     "gen",
+    "interrupt_all",
     "interruptible",
     "monotonic_time_nanos",
     "never",

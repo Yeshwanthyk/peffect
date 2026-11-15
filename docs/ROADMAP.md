@@ -99,6 +99,13 @@ an AGENTS.md section with the idiom and the mistakes it prevents.
   without widening B3. Broader Deferred
   operations, Latch, concurrency and TestClock remain incomplete. Deferred is not formally modeled.
 
+- Fiber bulk prerequisite unit (2026-11-15): public `await_all` / `interrupt_all` and explicit
+  `fork` / `fork_daemon(uninterruptible="inherit")`; defaults remain interruptible. Thirteen tests,
+  type fixtures and targeted mutations pass; the kernel model now covers inherited startup.
+  Independent Sol review and recheck passed. The iterator-error regression preserves target
+  publication and fails only the waiter; 155 tests pass excluding TestClock. Boolean mask modes, concurrent traversal and
+  parallel Scope remain incomplete; consumers must compose these public primitives.
+
 ## Order and why
 
 - Context/Clock/Scope come before concurrency: `timeout` needs Clock (else it is untestable

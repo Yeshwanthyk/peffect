@@ -17,9 +17,9 @@ interrupter. The model is `FiberKernel.tla`. The same promises are tested on the
 | `Drive`, `LoopTop`, `Ready`, `DriveTail` | `Fiber._drive` (entry, loop-top delivery, tail delivery to a parked fiber) |
 | `IntUnsafe` | `Fiber.interrupt_unsafe`, `_interrupt_parked`, `take_interrupt`, `_wake` |
 | `Park`, `ExtResume`, `Wake` | `core.Async._eval` (register, `_park`), its `resume` with the `Park.done` guard |
-| `Eval` "mask" / "unmask" | `uninterruptible`; `SetInterruptible.on_any` delivering through `take_interrupt` |
+| `Eval` "mask" / "unmask" / "enable" | `uninterruptible`; `SetInterruptible.on_any` delivering through `take_interrupt` |
 | `Done`, `AwaitPark` | `Fiber._done` (`_ending`, interrupt children), `_await_all`, `_publish`, `add_observer` |
-| `Eval` "fork", `under`, `EndDrive` | `fiber._start` via `fork` (`fork_daemon` shares it; a parentless child isn't modeled); `start_immediately=True` runs `child._drive` nested in the parent's drive (`under` holds the suspended parent until the child's slice ends) |
+| `Eval` "fork", `under`, `EndDrive` | `fiber._start` via `fork` (`fork_daemon` shares it; a parentless child isn't modeled); default or inherited interruptibility is installed before either startup path; `start_immediately=True` runs `child._drive` nested in the parent's drive (`under` holds the suspended parent until the child's slice ends) |
 
 **Not modeled: context.** The model has no context state. `update_context`, `RestoreContext`,
 `Fiber.swap_context` and the context a fork passes on are proven by `tests/test_context.py`
@@ -29,13 +29,13 @@ Why the model's pass still means something with them added (an argument, not a c
 nor holds back an interrupt, and the model's "the interrupt unwinds to the top" still describes
 the code.
 
-**Sync:** 2026-11-15, on top of `05a97f0` with the uncommitted immediate-fork change
-(`_start(immediate)`, Effect v4 forkUnsafe internal/effect.ts:5614-5637): the fork action
-chooses scheduled or immediate; 673 states, depth 20, all configured rules hold, every
-`Break_*.cfg` still red, and a scratch `_done` break turns the linked tests red. `exit_`'s
-`ExitFrame` is an ordinary handler frame, abstracted like other handlers into "the interrupt
-unwinds to the top". Earlier: context baseline `b74fa2f`; finalization changes on `1c2828b`
-(`OnExit` callbacks, cause election) are outside the modeled semantics.
+**Sync:** 2026-11-15, fiber bulk/inherited-mask unit: fork copies either the caller's
+interruptibility or the default `True` before scheduled or immediate startup, matching
+`internal/effect.ts:5614-5637`. The model explores both caller masks and both options; 988
+states, depth 22, every configured rule holds. Every `Break_*.cfg` remains red. An isolated
+scratch `_done` break makes three linked tests fail; production bytes remain unchanged.
+Earlier immediate-fork model: 673 states, depth 20. `exit_` and finalizer bodies remain
+abstracted into "the interrupt unwinds to the top"; their cause semantics are not modeled.
 A change to any symbol in the table, or new code that writes
 `_deferred`, `_parked`, `Park.done`, `_exit`, `children` or `interruptible`, means the model
 needs another look before its pass means anything.
@@ -48,14 +48,23 @@ needs another look before its pass means anything.
 | `K2_ResumeOnce` | a Park continues its fiber at most once | the fiber runs a continuation twice |
 | `K3_OneRunner` | at most one `_drive` per fiber is queued or running | two run loops share one stack |
 | `K6_MasksHold` | no interrupt is delivered inside a mask | half-done acquire/release |
-| `K7_InterruptsLand` | an interrupt requested before the exit ends up in the exit | `interrupt()` silently ignored |
+| `K7_InterruptsLand` | an interrupt requested before exit lands once execution regains interruptibility | `interrupt()` silently ignored |
 | `K8_NoOrphans` | a parent publishes only after its forked child has | leaked work running past its scope |
 | deadlock, `AllPublish` | every started fiber publishes; nothing gets stuck | a joiner waits forever |
 
-**Reach:** every interleaving of this instance: P forks C, parks, and ends; C parks, masks,
-parks inside the mask, and unmasks. One external interrupt of P can arrive at any loop turn,
-async completions can arrive at any turn (late ones included), and one `register` can
-interrupt its own fiber. A fork may start its child immediately, nested. 673 states, depth 20.
+**Reach:** every interleaving of this instance: P starts masked or interruptible, forks C
+with default or inherited interruptibility, explicitly enables interruption, parks, and ends.
+C parks, explicitly enables interruption, masks, parks inside the mask, and unmasks. One
+external interrupt of P can arrive at any loop turn; async completions can arrive at any turn
+(late ones included), and one register can interrupt its own fiber. Startup may be scheduled
+or immediate, nested. 988 states, depth 22. Both fibers regain interruptibility before normal
+completion: K7 does not claim that a permanently masked worker must publish an interrupt.
+
+**Bulk limits:** public `await_all` / `interrupt_all` reuse the modeled Async/observer protocol,
+but ordered iteration, multiple targets, signal-before-wait and cancellation subscription
+cleanup are checked by `test_fiber_bulk_upstream.py` and runtime mutations, not this model.
+The separate supervision `_await_all` remains unchanged. Parentless daemon supervision is
+still outside this two-fiber model.
 
 **Assumptions:**
 - One asyncio loop. `_drive` never awaits.

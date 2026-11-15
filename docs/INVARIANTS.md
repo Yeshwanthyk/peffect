@@ -13,7 +13,7 @@ One owner: the `Fiber`. Nothing else writes these fields except through the meth
 | state | field | written by |
 |---|---|---|
 | continuation stack | `Fiber.stack` | node `_eval`s (push), `Fiber._pop` (pop) |
-| may be interrupted now | `Fiber.interruptible` | `uninterruptible*`, `interruptible`, `SetInterruptible.on_any`, `_mask_while_popping` |
+| may be interrupted now | `Fiber.interruptible` | `_start` (before startup), `uninterruptible*`, `interruptible`, `SetInterruptible.on_any`, `_mask_while_popping` |
 | interrupt requested | `Fiber.interrupted` (Cause or None) | `Fiber.interrupt_unsafe` only |
 | interrupt not yet delivered | `Fiber._deferred` | `interrupt_unsafe` (set), `Fiber.take_interrupt` (clear; every delivery site calls it) |
 | parked on an Async | `Fiber._parked` + `Park.done` | `Async._eval` (park), `resume` / `_interrupt_parked` (flip done) |
@@ -29,7 +29,7 @@ Derived: `Fiber.exit` (property), `Cause.is_interrupted` etc. Nothing is cached.
 
 | transition | trigger | precondition | write | code |
 |---|---|---|---|---|
-| start | `fork` / `fork_daemon` / `run_exit` | — | child in `parent.children` (not for a daemon); one `_drive` scheduled, or with `start_immediately=True` run now, nested in the caller's drive, until it parks or ends (v4 forkUnsafe, internal/effect.ts:5614-5637) | `fiber._start` |
+| start | `fork` / `fork_daemon` / `run_exit` | — | default or inherited mask installed before startup; child in `parent.children` (not for a daemon); one `_drive` scheduled, or with `start_immediately=True` run now, nested in the caller's drive, until it parks or ends (v4 forkUnsafe, internal/effect.ts:5614-5637) | `fiber._start` |
 | step | run loop | `running` | eval one node; maybe push/pop frames | `Fiber._drive` |
 | park | `Async._eval` | `register` didn't resume synchronously | `_parked = park`; push `_AsyncCancel` if cancel | `Async._eval` |
 | resume | callback from asyncio / another fiber | `not park.done` | `park.done = True`; schedule `_drive(eff)` | `Async._eval.resume` |
@@ -48,7 +48,7 @@ Derived: `Fiber.exit` (property), `Cause.is_interrupted` etc. Nothing is cached.
 | K4 | **Finalizers run.** Every `OnExit` frame that was pushed runs its finalizer exactly once before the fiber publishes. | `OnExit.on_any` masks as it pops, stopping the unwind |
 | K5 | **Interrupts aren't caught.** A user error handler never runs with an interrupt in flight while the fiber is interruptible. | `Failure._eval` skip loop |
 | K6 | **Masks hold.** No interrupt is delivered while `interruptible` is False. | every delivery site checks `interruptible` |
-| K7 | **Interrupts land.** A requested interrupt is delivered at the next interruptible point; a fiber that finishes after one has `Interrupt` in its cause, unless it had already finished. | `_deferred`, `SetInterruptible`, `_drive` tail |
+| K7 | **Interrupts land.** A requested interrupt is delivered at the next interruptible point; if the fiber reaches one before finishing, its cause contains `Interrupt`. A worker that stays masked through completion need not deliver it. | `_deferred`, `SetInterruptible`, `_drive` tail |
 | K8 | **No orphans.** A fiber publishes only after every child it forked has published. | `_done` |
 | K9 | **Causes don't lose reasons**, except: the typed `Fail`s of a skipped handler's region are dropped on interrupt (v4 `core.ts:601-629`). Stronger than v4 in two places: a defect unwinding out of a mask, and a body's exit when an interrupt lands while waiting on children, keep their reasons (v4 replaces them with the interrupt). A failing or raising finalizer adds its cause to the body's, then defects are elected as v4 does (`combineFinalizerCause`, `causeElectDefects`, internal/effect.ts:4069-4075, 184-191): with a `Die` present, each `Fail` becomes a `Die` holding the same value, so a `Die`'s defect is any value. | `Cause.__add__`, `Cause.elect_defects`, `OnExit._finalizer`, `OnExit.on_err`, `Failure._eval`, `Fiber._done` |
 | K10 | **Stack safety.** Composition depth never becomes Python recursion depth. | nodes return the next node |
@@ -200,6 +200,22 @@ Only the tested constructor/await/completion subset is supported. Broader Deferr
 unported. The :149 port uses a one-second harness watchdog instead of virtual TestClock timing;
 callback tests independently pin synchronous notification. Deferred is not formally modeled;
 the existing protocol model is unchanged. Independent review and integration remain pending.
+
+## Public fiber bulk operations
+
+Pinned `internal/effect.ts:876-908, :992-1003, :5614-5637`. The private supervision wait
+remains separate; callers outside the kernel need no new B3 access.
+
+| # | Invariant | Enforced by | Pinned by |
+|---|---|---|---|
+| FB1 | **Await preserves input order and target Exits.** External cancellation interrupts the waiter, removes its current observer, and leaves targets running. | `await_all`: one iterator, completed-fiber loop, current subscription cleanup | ordered Exit and interrupted waiter tests; cleanup mutation |
+| FB5 | **Iterator failures affect only the waiter.** They must not escape through target publication, overwrite its Exit or strand the waiter. | iterator advancement catches exceptions and resumes with a defect | pending-target iterator failure regression; independent initial/completed-prefix probes |
+| FB2 | **Interrupt signals all targets before waiting.** The iterable is consumed once; interrupt causes use the executing caller's id. | `interrupt_all`: signal/collect loop then `await_all` | one-shot upstream port, cleanup gate and exact causes; sequential-signaling mutation |
+| FB3 | **Mask inheritance is explicit and precedes startup.** Defaults stay interruptible; daemon workers remain unsupervised. | fork options and `_start` mask assignment before drive/scheduling | both fork API tests, scheduled-start probe; inherit/default mutations; extended protocol model |
+| FB4 | **Bulk success contains typed Exits; worker requirements survive fork.** Unsupported mask options are rejected. | public generic signatures and Literal option validation | positive typetests and negative blocks 42-49 |
+
+Boolean uninterruptible modes remain unsupported. The kernel model covers inherited startup
+and the existing interrupt/observer protocol, not bulk ordering or multiple-target semantics.
 
 ## Kernel boundary
 

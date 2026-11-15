@@ -20,6 +20,7 @@ from peffect import (
     acquire_release,
     acquire_use_release,
     add_finalizer,
+    await_all,
     catch_all,
     catch_tag,
     clock_with,
@@ -31,6 +32,7 @@ from peffect import (
     fork,
     fork_daemon,
     gen,
+    interrupt_all,
     on_error,
     on_exit,
     on_interrupt,
@@ -287,3 +289,22 @@ assert_type(deferred.interrupt_with(-1), Effect[bool, Never, Never])
 assert_type(deferred.interrupt(), Effect[bool, Never, Never])
 assert_type(Deferred[int].make_unsafe(), Deferred[int, Never])
 assert_type(fiber_id, Effect[int, Never, Never])
+
+
+# Fiber bulk operations preserve ordered Exit channels, never the target's error as failure.
+def fiber_bulk_types(first: Fiber[int, NotFound], second: Fiber[str, Timeout]) -> None:
+    assert_type(await_all([first]), Effect[list[Exit[int, NotFound]], Never, Never])
+    targets: list[Fiber[int | str, NotFound | Timeout]] = [first, second]
+    assert_type(
+        await_all(iter(targets)), Effect[list[Exit[int | str, NotFound | Timeout]], Never, Never]
+    )
+    assert_type(interrupt_all(iter(targets)), Effect[None, Never, Never])
+
+
+assert_type(
+    fork(Users().use(), uninterruptible="inherit"), Effect[Fiber[Repo, Never], Never, Users]
+)
+assert_type(
+    fork_daemon(find(1), uninterruptible="inherit"), Effect[Fiber[str, NotFound], Never, Never]
+)
+assert_type(fork(succeed(1)), Effect[Fiber[int, Never], Never, Never])

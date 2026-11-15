@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import itertools
-from collections.abc import Callable
-from typing import Any, Generic, Never, TypeVar, final
+from collections.abc import Callable, Iterable
+from typing import Any, Generic, Literal, Never, TypeVar, final
 
 from peffect.cause import Cause
 from peffect.core import (
@@ -243,6 +243,61 @@ class Fiber(Generic[A_co, E_co]):
         return WithFiber(go)
 
 
+def await_all[A, E](fibers: Iterable[Fiber[A, E]]) -> Effect[list[Exit[A, E]], Never, Never]:
+    """Wait in input order, returning target failures as Exits. Cancellation removes the
+    current observer without interrupting targets (Effect v4 internal/effect.ts:876-908)."""
+
+    def register(resume: Resume[list[Exit[A, E]], Never, Never]) -> AnyEffect:
+        iterator = iter(fibers)
+        exits: list[Exit[A, E]] = []
+        cancel: Callable[[], None] | None = None
+
+        def loop() -> None:
+            nonlocal cancel
+            while True:
+                try:
+                    fiber = next(iterator, None)
+                except Exception as error:
+                    resume(Failure(Cause.die(error)))
+                    return
+                if fiber is None:
+                    resume(Success(exits))
+                    return
+                exit_ = fiber.exit
+                if exit_ is not None:
+                    exits.append(exit_)
+                    continue
+                cancel = fiber.add_observer(one_done)
+                return
+
+        def one_done(exit_: Exit[A, E]) -> None:
+            exits.append(exit_)
+            loop()
+
+        def cleanup() -> None:
+            if cancel is not None:
+                cancel()
+
+        loop()
+        return Sync(cleanup)
+
+    return Async(register)
+
+
+def interrupt_all[A, E](fibers: Iterable[Fiber[A, E]]) -> Effect[None, Never, Never]:
+    """Signal every target with the executing caller's id before awaiting any cleanup.
+    Consume the iterable once (Effect v4 internal/effect.ts:992-1003)."""
+
+    def go(parent: Fiber[Any, Any]) -> Effect[None, Never, Never]:
+        targets: list[Fiber[A, E]] = []
+        for fiber in fibers:
+            fiber.interrupt_unsafe(parent.id)
+            targets.append(fiber)
+        return await_all(targets).as_(None)
+
+    return WithFiber(go)
+
+
 def _await_all(fibers: list[Fiber[Any, Any]]) -> AnyEffect:
     """Park until every fiber has published. Interruptible: cancelling removes the observers."""
 
@@ -277,10 +332,12 @@ def _start[A, E](
     ctx: ContextMap,
     loop: asyncio.AbstractEventLoop,
     immediate: bool = False,
+    interruptible: bool = True,
 ) -> Fiber[A, E]:
     """Effect v4: forkUnsafe, internal/effect.ts:5614-5637. ``immediate`` runs the child's first
     slice now, inside the caller's drive, until it parks or ends; otherwise it is scheduled."""
     child: Fiber[A, E] = Fiber(loop, ctx, parent)
+    child.interruptible = interruptible
     if parent is not None:
         parent.children.add(child)
     drive = child._drive  # pyright: ignore[reportPrivateUsage]
@@ -292,23 +349,53 @@ def _start[A, E](
 
 
 def fork[A, E, R](
-    eff: Effect[A, E, R], *, start_immediately: bool = False
+    eff: Effect[A, E, R],
+    *,
+    start_immediately: bool = False,
+    uninterruptible: Literal["inherit"] | None = None,
 ) -> Effect[Fiber[A, E], Never, R]:
     """Run eff concurrently. The child is supervised: when the parent ends, the child is
     interrupted and the parent waits for it. ``start_immediately`` runs the child until it first
-    parks or ends before ``fork`` returns (Effect v4: forkChild's ``startImmediately``)."""
+    parks or ends before ``fork`` returns (Effect v4: forkChild's ``startImmediately``).
+    Only ``uninterruptible="inherit"`` copies the caller's mask; the default is interruptible."""
+    if uninterruptible is not None and uninterruptible != "inherit":
+        raise ValueError('uninterruptible must be None or "inherit"')
     return WithFiber(
-        lambda p: Success(_start(p, eff, p.context, p._loop, start_immediately))  # pyright: ignore[reportPrivateUsage]
+        lambda p: Success(
+            _start(
+                p,
+                eff,
+                p.context,
+                p._loop,  # pyright: ignore[reportPrivateUsage]
+                start_immediately,
+                p.interruptible if uninterruptible == "inherit" else True,
+            )
+        )
     )
 
 
 def fork_daemon[A, E, R](
-    eff: Effect[A, E, R], *, start_immediately: bool = False
+    eff: Effect[A, E, R],
+    *,
+    start_immediately: bool = False,
+    uninterruptible: Literal["inherit"] | None = None,
 ) -> Effect[Fiber[A, E], Never, R]:
     """Run eff concurrently with no parent: it outlives the fiber that started it.
-    ``start_immediately`` as for ``fork`` (Effect v4: forkDetach, internal/effect.ts:5728)."""
+    ``start_immediately`` and ``uninterruptible="inherit"`` work as for ``fork``
+    (Effect v4: forkDetach, internal/effect.ts:5728)."""
+    if uninterruptible is not None and uninterruptible != "inherit":
+        raise ValueError('uninterruptible must be None or "inherit"')
     return WithFiber(
-        lambda p: Success(_start(None, eff, p.context, p._loop, start_immediately))  # pyright: ignore[reportPrivateUsage]
+        lambda p: Success(
+            _start(
+                None,
+                eff,
+                p.context,
+                p._loop,  # pyright: ignore[reportPrivateUsage]
+                start_immediately,
+                p.interruptible if uninterruptible == "inherit" else True,
+            )
+        )
     )
 
 
@@ -335,4 +422,4 @@ async def run[A](eff: Effect[A, Never, Never]) -> A:
     raise exit_.cause.squash()
 
 
-__all__ = ["UNIT", "Fiber", "fork", "fork_daemon", "run", "run_exit"]
+__all__ = ["UNIT", "Fiber", "await_all", "fork", "fork_daemon", "interrupt_all", "run", "run_exit"]

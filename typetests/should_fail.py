@@ -7,6 +7,7 @@ from peffect import (
     Context,
     Deferred,
     Effect,
+    Exit,
     Fiber,
     Reference,
     Scope,
@@ -16,8 +17,11 @@ from peffect import (
     acquire_release,
     acquire_use_release,
     add_finalizer,
+    await_all,
     catch_tag,
     fail,
+    fork,
+    fork_daemon,
     gen,
     provide,
     scoped,
@@ -248,3 +252,28 @@ def deferred_value_cannot_narrow(cell: Deferred[object, NotFound]) -> None:
 def deferred_error_cannot_narrow(cell: Deferred[int, Exception]) -> None:
     # 41. DEFERRED_ERROR_NOT_CONTRAVARIANT: broader failures cannot become NotFound-only
     _narrow: Deferred[int, NotFound] = cell
+
+
+
+def bulk_channels_cannot_disappear(target: Fiber[int, NotFound]) -> None:
+    # 42. BULK_EXIT_ERROR_LOST: target errors remain in each Exit
+    _lost: Effect[list[Exit[int, Never]], Never, Never] = await_all([target])
+    # 43. BULK_EXIT_VALUE_LOST: ordered results preserve their value channel
+    _wrong: Effect[list[Exit[str, NotFound]], Never, Never] = await_all([target])
+
+
+async def inherited_fork_still_needs_its_environment() -> None:
+    # 44. INHERITED_FORK_DEPENDENCY_MISSING: inheriting a mask does not erase R
+    await peffect.run(fork(Users().use(), uninterruptible="inherit"))
+    # 45. INHERITED_DAEMON_DEPENDENCY_MISSING: detach also preserves R
+    await peffect.run(fork_daemon(Users().use(), uninterruptible="inherit"))
+
+
+# 46. FORK_UNSUPPORTED_BOOLEAN: boolean modes are not yet supported
+fork(succeed(1), uninterruptible=True)
+# 47. DAEMON_UNSUPPORTED_BOOLEAN: False is not an alias for the supported default None
+fork_daemon(succeed(1), uninterruptible=False)
+# 48. FORK_UNSUPPORTED_MODE: accept only the tested upstream inherit option
+fork(succeed(1), uninterruptible="masked")
+# 49. INHERITED_FORK_ERROR_LOST: a fork retains the worker's E
+_wrong_worker: Effect[Fiber[str, Never], Never, Never] = fork(find(1), uninterruptible="inherit")

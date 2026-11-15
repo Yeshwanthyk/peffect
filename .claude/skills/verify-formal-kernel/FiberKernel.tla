@@ -10,8 +10,10 @@
    Fork with startImmediately (fiber._start(immediate=True)) drives C synchronously inside P's
    drive until C parks or ends; `under` holds P while that nested drive runs.
 
-   Two fibers: P forks C, parks, and ends while C may still run. C parks, masks, parks again
-   inside the mask, and unmasks. An interrupter interrupts P once, at any loop turn.
+   Two fibers: P starts masked or interruptible, forks C with default or inherited mask,
+   explicitly enables interruption, parks, and ends while C may still run. C parks, explicitly
+   enables interruption, masks, parks again inside the mask, and unmasks. Both explicitly
+   regain interruption before finishing: K7 does not cover permanently masked completion. An interrupter interrupts P once, at any loop turn.
    Async completions (resume callbacks) arrive at any loop turn, late ones included.     *)
 EXTENDS Naturals, Sequences
 
@@ -19,8 +21,8 @@ CONSTANT Break  \* "none" = the code as it is; the other values mirror scratch b
 
 Fibers == {"P", "C"}
 Prog == [f \in Fibers |->
-           IF f = "P" THEN <<"fork", "park">>
-           ELSE <<"park", "mask", "park", "unmask">>]
+           IF f = "P" THEN <<"fork", "enable", "park">>
+           ELSE <<"park", "enable", "mask", "park", "unmask">>]
 End(f) == Len(Prog[f]) + 1
 WAIT == 99  \* pc and park id while P is parked on _await_all in Fiber._done
 
@@ -47,9 +49,10 @@ vars == <<cur, fb, started, obs, sent, selfUsed, under>>
    pubs    times _publish ran (K1)      req     an interrupt was requested before the exit *)
 
 Init ==
+  \E parentIntr \in BOOLEAN :
   /\ cur = "none"
   /\ fb = [f \in Fibers |->
-            [pc |-> 1, node |-> "none", intr |-> TRUE, irq |-> FALSE, dfr |-> FALSE,
+            [pc |-> 1, node |-> "none", intr |-> IF f = "P" THEN parentIntr ELSE TRUE, irq |-> FALSE, dfr |-> FALSE,
              parked |-> FALSE, pid |-> 0, pdone |-> TRUE, wakes |-> 0, ext |-> {},
              drv |-> IF f = "P" THEN <<"start">> ELSE <<>>,
              ending |-> "none", exit |-> "none", pubs |-> 0, req |-> FALSE]]
@@ -58,7 +61,8 @@ Init ==
 \* the running drive returns: to the drive it was nested in (immediate fork), or to the loop
 EndDrive == cur' = under /\ under' = "none"
 
-Masked(f) == f = "C" /\ fb[f].pc \in {3, 4}  \* between C's "mask" and "unmask"
+Masked(f) == ~fb[f].intr \/ (f = "C" /\ fb[f].pc \in {4, 5})
+\* Keep the explicit-mask interval independent of intr; also check inherited startup masks.
 
 \* Fiber.interrupt_unsafe -> _interrupt_parked -> take_interrupt, _wake
 IntUnsafe(r, running) ==
@@ -163,21 +167,23 @@ Eval(f) ==
      ELSE IF r.pc = WAIT \/ r.pc = End(f) THEN Done(f, "ok", obs)
      ELSE IF ins = "park" THEN Park(f)
      ELSE IF ins = "fork" THEN
-        \E imm \in BOOLEAN :
+        \E imm \in BOOLEAN, inherit \in BOOLEAN :
         /\ started' = TRUE
         /\ IF imm THEN  \* _start(immediate=True): C's _drive runs now, nested in P's
               /\ fb' = [fb EXCEPT ![f] = [r EXCEPT !.pc = @ + 1, !.node = "ok"],
-                                  !["C"] = [@ EXCEPT !.node = "start", !.parked = FALSE]]
+                                  !["C"] = [@ EXCEPT !.node = "start", !.parked = FALSE,
+                                     !.intr = IF inherit THEN r.intr ELSE TRUE]]
               /\ cur' = "C" /\ under' = f
               /\ UNCHANGED <<obs, sent, selfUsed>>
            ELSE  \* _start: C's _drive is scheduled (loop.call_soon)
               /\ fb' = [fb EXCEPT ![f] = [r EXCEPT !.pc = @ + 1, !.node = "ok"],
-                                  !["C"] = [@ EXCEPT !.drv = Append(@, "start")]]
+                                  !["C"] = [@ EXCEPT !.drv = Append(@, "start"),
+                                     !.intr = IF inherit THEN r.intr ELSE TRUE]]
               /\ UNCHANGED <<cur, obs, sent, selfUsed, under>>
      ELSE IF ins = "mask" THEN
         /\ fb' = [fb EXCEPT ![f] = [r EXCEPT !.pc = @ + 1, !.node = "ok", !.intr = FALSE]]
         /\ UNCHANGED <<cur, started, obs, sent, selfUsed, under>>
-     ELSE \* "unmask": SetInterruptible.on_any delivers a waiting interrupt via take_interrupt
+     ELSE \* "enable" / "unmask": interruptible / SetInterruptible.on_any deliver via take_interrupt
         /\ fb' = [fb EXCEPT ![f] = [r EXCEPT !.pc = @ + 1, !.intr = TRUE,
                                              !.node = IF r.irq THEN "int" ELSE "ok",
                                              !.dfr = IF r.irq THEN FALSE ELSE r.dfr]]
