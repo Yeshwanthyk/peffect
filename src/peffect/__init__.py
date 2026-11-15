@@ -28,6 +28,7 @@ from peffect.core import (
     exit_,
     fail,
     fail_cause,
+    fiber_id,
     from_async,
     gen,
     interruptible,
@@ -43,6 +44,7 @@ from peffect.core import (
     update_context,
     yield_now,
 )
+from peffect.deferred import Deferred
 from peffect.fiber import Fiber, fork, fork_daemon, run, run_exit
 from peffect.resources import acquire_release, acquire_use_release, add_finalizer
 from peffect.scope import Closeable, Scope, ScopeService, scope, scoped
@@ -55,6 +57,7 @@ __all__ = [
     "Context",
     "ContextMap",
     "DefectError",
+    "Deferred",
     "Die",
     "Do",
     "Effect",
@@ -87,6 +90,7 @@ __all__ = [
     "exit_",
     "fail",
     "fail_cause",
+    "fiber_id",
     "fork",
     "fork_daemon",
     "from_async",

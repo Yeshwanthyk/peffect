@@ -182,6 +182,25 @@ Only default masked `acquire_release` acquisition is supported; the optional int
 acquisition mode has no API yet. No kernel runtime change, and no new formal-model claim.
 Independent review and integration remain the coordinator's gate.
 
+## Deferred and fiber identity
+
+`deferred.py` follows pinned `Deferred.ts:151-193, :881-894`, using only public `async_`,
+Effect/Exit constructors, `sync`, and `fiber_id`. The id effect is a lazy `WithFiber` read in
+`core.py`, matching `internal/effect.ts:1196-1204`; it adds no run-loop state or transition.
+
+| # | Invariant | Enforced by | Pinned by |
+|---|---|---|---|
+| DF1 | **First completion wins and stores the Effect itself.** Each await evaluates it independently. | `done_unsafe` checks `effect` before mutation; `await_` resumes with it | success/failure ports; source-derived first-completion and lazy-replay tests |
+| DF2 | **Completion detaches waiters before notification.** Reentrant completion returns false; every captured callback receives the original Effect. | `done_unsafe` clears `resumes` before its synchronous loop | interrupt-all-waiters port and source-derived callback test |
+| DF3 | **Interrupted waiters remove only their own callback.** Cleanup after completion does nothing. | `async_` cancellation effect checks current `resumes` before removal | suspended-waiter removal and post-completion interruption ports |
+| DF4 | **The cell's A and E are invariant; stored Effects need no environment.** | `Deferred[A, E]` fields/methods and completion signatures | positive typetests; negative blocks 30-41 |
+| DF5 | **Interruption records the completing fiber's id.** The reusable `fiber_id` effect reads each executing fiber rather than caching an id. | `interrupt` composes `fiber_id`; kernel `WithFiber` + `succeed` | current-fiber interruption and parent/child id source tests |
+
+Only the tested constructor/await/completion subset is supported. Broader Deferred APIs remain
+unported. The :149 port uses a one-second harness watchdog instead of virtual TestClock timing;
+callback tests independently pin synchronous notification. Deferred is not formally modeled;
+the existing protocol model is unchanged. Independent review and integration remain pending.
+
 ## Kernel boundary
 
 Only the kernel (`src/peffect/core.py`, `fiber.py`, `cause.py`, `__init__.py`) knows about fibers

@@ -5,6 +5,7 @@ from typing import Any, Never
 import peffect
 from peffect import (
     Context,
+    Deferred,
     Effect,
     Fiber,
     Reference,
@@ -21,6 +22,7 @@ from peffect import (
     provide,
     scoped,
     succeed,
+    sync,
 )
 
 
@@ -202,3 +204,47 @@ async def use_release_without_dependency() -> None:
 _wrong_resource: Effect[str, Never, Scope] = acquire_release(
     succeed(1), lambda _a, _ex: succeed(None)
 )
+
+
+_deferred = Deferred[int, NotFound].make_unsafe()
+
+# 30. DEFERRED_WRONG_VALUE: completion cannot change the cell's A
+_deferred.succeed("wrong")
+
+# 31. DEFERRED_WRONG_ERROR: completion cannot change the cell's E
+_deferred.fail(Other())
+
+# 32. DEFERRED_VALUE_INVARIANT: widening A would permit writing the wrong value
+_wide_value: Deferred[object, NotFound] = _deferred
+
+# 33. DEFERRED_ERROR_INVARIANT: widening E would permit writing the wrong error
+_wide_error: Deferred[int, Exception] = _deferred
+
+# 34. DEFERRED_COMPLETION_REQUIRES_SERVICE: awaiters need no environment
+_deferred.done_unsafe(Users().use().as_(1))
+
+# 35. DEFERRED_STORED_EFFECT_REQUIRES_SERVICE: direct storage cannot bypass that promise
+_deferred.effect = Users().use().as_(1)
+
+# 36. DEFERRED_COMPLETION_WRONG_ERROR: direct completion retains the declared E
+_deferred.done_unsafe(fail(Other()))
+
+# 37. DEFERRED_COMPLETION_WRONG_VALUE: direct completion retains the declared A
+_deferred.done_unsafe(succeed("wrong"))
+
+# 38. DEFERRED_DONE_REQUIRES_EXIT: lazy Effects use done_unsafe, not the Exit-only wrapper
+_deferred.done(sync(lambda: 1))
+
+# 39. DEFERRED_AWAIT_ERROR_LOST: await preserves the cell's declared E
+_deferred_error_lost: Effect[int, Never, Never] = _deferred.await_()
+
+
+
+def deferred_value_cannot_narrow(cell: Deferred[object, NotFound]) -> None:
+    # 40. DEFERRED_VALUE_NOT_CONTRAVARIANT: a broader cell cannot promise narrower reads
+    _narrow: Deferred[int, NotFound] = cell
+
+
+def deferred_error_cannot_narrow(cell: Deferred[int, Exception]) -> None:
+    # 41. DEFERRED_ERROR_NOT_CONTRAVARIANT: broader failures cannot become NotFound-only
+    _narrow: Deferred[int, NotFound] = cell

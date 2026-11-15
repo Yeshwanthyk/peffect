@@ -8,8 +8,10 @@ from peffect import (
     ClockService,
     Closeable,
     Context,
+    Deferred,
     Effect,
     Exit,
+    Failure,
     Fiber,
     Reference,
     Scope,
@@ -25,6 +27,7 @@ from peffect import (
     ensuring,
     exit_,
     fail,
+    fiber_id,
     fork,
     fork_daemon,
     gen,
@@ -268,3 +271,19 @@ assert_type(find(1).on_exit(lambda _: fail(Timeout())), Effect[str, NotFound | T
 assert_type(
     find(1).pipe(on_exit(lambda _: fail(Timeout()))), Effect[str, NotFound | Timeout, Never]
 )
+
+
+# Deferred: completion keeps the cell's A/E; stored Effects require no environment.
+deferred = Deferred[int, NotFound].make_unsafe()
+assert_type(deferred, Deferred[int, NotFound])
+assert_type(Deferred[int, NotFound].make(), Effect[Deferred[int, NotFound], Never, Never])
+assert_type(deferred.effect, Effect[int, NotFound, Never] | None)
+assert_type(deferred.await_(), Effect[int, NotFound, Never])
+assert_type(deferred.succeed(1), Effect[bool, Never, Never])
+assert_type(deferred.fail(NotFound()), Effect[bool, Never, Never])
+assert_type(deferred.done_unsafe(fail(NotFound())), bool)
+assert_type(deferred.done(Failure(Cause.fail(NotFound()))), Effect[bool, Never, Never])
+assert_type(deferred.interrupt_with(-1), Effect[bool, Never, Never])
+assert_type(deferred.interrupt(), Effect[bool, Never, Never])
+assert_type(Deferred[int].make_unsafe(), Deferred[int, Never])
+assert_type(fiber_id, Effect[int, Never, Never])

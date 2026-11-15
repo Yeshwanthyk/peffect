@@ -187,6 +187,10 @@ class WithFiber(Effect[A_co, E_co, R_co]):
         return self.f(fiber)
 
 
+fiber_id: Effect[int, Never, Never] = WithFiber(lambda fiber: succeed(fiber.id))
+"""The executing fiber's id, read on every run (Effect v4 internal/effect.ts:1196-1204)."""
+
+
 @final
 class YieldNow(Effect[None, Never, Never]):
     __slots__ = ()

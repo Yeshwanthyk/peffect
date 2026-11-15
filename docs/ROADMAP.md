@@ -92,6 +92,13 @@ an AGENTS.md section with the idiom and the mistakes it prevents.
   acquisition and remaining Scope effects are incomplete; no
   Layer, Deferred or TestClock implementation is included.
 
+- Deferred prerequisite unit (2026-11-15): `deferred.py` stores completion Effects and waiter
+  callbacks, with direct synchronous completion and interruption-safe unregistering. Ten tests
+  and A/E/environment-free completion typetests pass; independent Sol and structural review
+  passed, with 142 tests green excluding TestClock. Public `fiber_id` reads the executing fiber
+  without widening B3. Broader Deferred
+  operations, Latch, concurrency and TestClock remain incomplete. Deferred is not formally modeled.
+
 ## Order and why
 
 - Context/Clock/Scope come before concurrency: `timeout` needs Clock (else it is untestable

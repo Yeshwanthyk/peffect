@@ -153,3 +153,29 @@ failure with the original error identity. Exception/Exit adaptations follow batc
 Not covered: optional interruptible acquisition; the Scheduler-specific scoped installation
 interruption (:85); tryPromise/AbortController (:566); unrelated AiError finalizers (:4892,
 :4983). These remain incomplete, with no simulated replacements.
+
+
+## Deferred prerequisite unit — `tests/test_deferred_upstream.py`
+
+Ten cases pass locally; independent review and integration remain pending. Constructors use
+`Deferred[A, E].make/make_unsafe`; completion and await are cell methods. Layer's required
+stored completion Effect remains available as `effect` (Layer.ts:438).
+
+| Pinned source | Port / source-derived contract |
+|---|---|
+| Deferred.test.ts:10, :56, :93 | success, failure and interruption propagation |
+| Deferred.test.ts:102, :121, :149 | waiter removal, cleanup after completion, every interrupted waiter settles |
+| Deferred.ts:151, :881-894 | source-derived direct completion, first-wins and clear-before-notify/reentrant callbacks |
+| Deferred.ts:180-193, :881-894 | source-derived lazy stored Effect and re-evaluation on each await |
+| Deferred.ts:647-648 | source-derived interruption by the completing fiber's id |
+| internal/effect.ts:1196-1204 | source-derived public fiber_id read in parent and child |
+
+Implementation maps to Deferred.ts:151/178 (constructors), :180-193 (await), :881-894
+(doneUnsafe), :363-366/:323-326 (done), :400-404 (fail), :647-648/:683-695 (interrupt/
+interruptWith), :806-810 (succeed). No environment-dependent completion is accepted.
+
+The :149 liveness assertion uses a one-second asyncio harness watchdog in place of upstream
+Fiber.awaitAll/timeoutOption/TestClock.adjust(1000); it does not establish virtual-clock parity.
+Python schedules resumed fibers, so a white-box callback test independently checks clearing
+before synchronous notification. No Deferred fallback, skipped test or suppression is used.
+complete/completeWith, polling and the remaining convenience wrappers are not ported.
