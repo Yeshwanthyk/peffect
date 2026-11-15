@@ -12,6 +12,31 @@ The program handles a declared domain error. Success, failure and cancellation a
 resources. A test substitutes a service implementation without changing application code.
 Pyright rejects wrong implementations and running a program with missing dependencies.
 
+## Executable EffectJS comparison
+
+The minimum is all four: Scope/acquire-release, Tags/Layer, Pydantic/typed errors, and an
+end-to-end application. Acceptance requires a real TypeScript program running pinned Effect
+v4 `289a53f7` and a Python program exercising the same application scenarios.
+
+Both runners emit machine-readable outcomes and lifecycle events for:
+- valid input and a successful service result;
+- invalid input rejected before resource acquisition;
+- a declared domain failure and its recovery;
+- two consumers sharing one Layer resource (one acquire and one release);
+- replacing the service in a test without changing application logic;
+- failure and cancellation after acquisition, with cleanup completed before termination.
+
+Compare result values, error categories, construction/release counts, and causally ordered
+lifecycle events. Normalize only explicit cross-language representations such as generated
+fiber ids and exception rendering. Do not normalize away behavior differences. Choose equivalent
+validation constraints; Pydantic and Effect Schema retain their own diagnostic formats, and this
+comparison does not claim complete schema equivalence. Separately compile positive and negative
+typing fixtures in TypeScript and Python for missing dependencies and wrong implementations.
+
+Run the TypeScript reference first; its actual output supplies the comparison baseline. A test
+must report a mismatch when an observable outcome or cleanup event differs. Until both runners
+exist and match, this acceptance gate is incomplete.
+
 ## Delivery order
 
 1. Review and integrate the sequential Scope implementation already in progress.
