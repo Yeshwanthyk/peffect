@@ -120,13 +120,13 @@ Python frame.
 3. Added `Suspend` and `YieldNow`. (kernel.md)
 4. `Cause` tree (`Then`/`Both`) → flat reason tuple. (cause-exit.md)
 5. Supervision is `fork` (child) vs `fork_daemon` vs `fork_in(scope)`. (fibers.md)
-6. MemoMap needs Deferred + per-entry Scope + refcount; the v1 prototype (`prototypes/pfx`) used a dict memo, which is racy. (layer-scope.md)
+6. MemoMap needs Deferred + per-entry Scope + refcount; the v1 prototype ([archived v1 prototype](https://github.com/Yeshwanthyk/peffect/tree/f76c30475b2c3e19f0409f60dca43c73e3c4037a/prototypes/pfx)) used a dict memo, which is racy. (layer-scope.md)
 7. `Schema[A, I, R]` → `Codec[T, I, RD, RE]`. (schema.md)
 8. Schedule step may be effectful; combinators are `min`/`max`/`concat`. (schedule-clock.md)
 9. Added `Reference` (default-valued tag) for Clock, log level, tracer. (context.md)
 10. `TaggedError` yieldable. (config-data.md)
 
-## 6. Types (carried over from v1, already proven in the v1 prototype, `prototypes/pfx`)
+## 6. Types (carried over from v1, already proven in the v1 prototype, [archived v1 prototype](https://github.com/Yeshwanthyk/peffect/tree/f76c30475b2c3e19f0409f60dca43c73e3c4037a/prototypes/pfx))
 
 `Effect[A, E, R]` explicit covariant TypeVars; `@gen` + `yield from` gives per-site A and unions
 E/R; `catch_tag`/`provide` use exact-match-first overloads; `Layer.ROut` invariant; `run` takes

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.3
+
+- Separate traversal cancellation from failure accumulation; simplify Queue admission, numeric equality and Duration parsing without changing their contracts.
+- Add source-wide complexity budgets, callback-family review gates and pipe-signature consistency checks. Harrow 0.4.1 is a locked development dependency.
+- Add fresh pinned EffectJS comparisons for primitive behavior and cleanup ordering.
+- Remove the superseded pfx prototype; its source remains in Git history.
+- Remove mandatory third-party runtime dependencies. Pydantic remains installed for development examples; applications using Pydantic must declare it themselves.
+
+Evidence covers finite differential cases, generated interleavings and bounded kernel verification; it does not establish universal EffectJS equivalence.
+
 ## 0.1.1
 
 - Add TestClock with tracked wake settling, exact nanosecond time, cancellation and live-time warnings.

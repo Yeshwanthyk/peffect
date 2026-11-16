@@ -731,31 +731,35 @@ def _run_window[A, B, E, R](
     """The Async register of a concurrent traversal, on the caller `parent`, from item `start`
     whose effect `first` is already built. Returns the cancel effect, or None once resumed.
 
-    State: `index` is the next item to start, `live` the workers still running, `terminal` the
-    first failure (or UNIT after a cancel) with later non-interrupt reasons folded in, and
-    `done` says no more items will start. `pump` starts items, each a child forked with the
-    caller's mask, until the window is full. A worker's observer records its Exit, then refills
-    the window if its pump paused. The caller resumes once `done` and no worker is live."""
+    State: `index` owns progress and `live` owns workers. `cancelled` belongs to cancellation;
+    `failure` keeps only failures, never a success-as-cancellation sentinel. Admission is
+    derived from those facts, not separately synchronized. `pump` starts items, each a child
+    forked with the caller's mask, until the window is full. A worker's observer records its
+    Exit, then refills if its pump paused. The caller resumes after admission ends and
+    workers drain."""
     index = start
     end = len(items)
     pending: Effect[B, E, R] | None = first
     live: dict[Fiber[Any, Any], None] = {}
-    terminal: Exit[None, E] | None = None
-    done = False
+    failure: Failure[E] | None = None
+    cancelled = False
+
+    def can_start() -> bool:
+        return not cancelled and failure is None and index < end
 
     def pump() -> bool:
         """Start items until the window is full (True) or no more will start (False)."""
-        nonlocal index, terminal, pending
+        nonlocal index, failure, pending
         paused = [False]  # this call's: its observers refill only once it has paused
-        while terminal is None and index < end:
+        while can_start():
             eff = pending if pending is not None else f(items[index], index)
             pending = None
             if isinstance(eff, (Success, Failure)):
-                terminal = _step(out, index, eff)
+                failure = _step(out, index, eff)
             else:
                 fiber = _start(None, eff, parent.context, interruptible=parent.interruptible)
                 if fiber.exit is not None:
-                    terminal = _step(out, index, fiber.exit)
+                    failure = _step(out, index, fiber.exit)
                 else:
                     live[fiber] = None
                     fiber.add_observer(observe(fiber, index, paused))
@@ -769,14 +773,12 @@ def _run_window[A, B, E, R](
     def finish() -> Exit[None, E] | None:
         """No more items will start. After a terminal, interrupt the live workers. Returns the
         Exit to resume the caller with, or None while a worker is still live."""
-        nonlocal done
-        done = True
         if live:
-            if terminal is not None:
+            if failure is not None or cancelled:
                 for fiber in list(live):
                     fiber.interrupt_unsafe(parent.id)
             return None
-        return UNIT if terminal is None else terminal
+        return UNIT if failure is None else failure
 
     def go() -> Exit[None, E] | None:
         return None if pump() else finish()
@@ -784,19 +786,17 @@ def _run_window[A, B, E, R](
     def record(exit_: Exit[B, E], i: int) -> None:
         """Fold one worker's Exit into the run: keep its value, or make its failure the
         terminal and stop the rest. After a terminal, only its non-interrupt reasons count."""
-        nonlocal terminal
-        if terminal is None:
-            terminal = _step(out, i, exit_)
-            if terminal is not None:
-                finish()
+        nonlocal failure
+        if failure is None and not cancelled:
+            failure = _step(out, i, exit_)
+            if failure is not None:
+                finish()  # failure already closes admission before interrupts reenter observers
         elif isinstance(exit_, Failure):
             kept = tuple(r for r in exit_.cause.reasons if not isinstance(r, Interrupt))
             if kept:
                 cause = Cause(kept)
-                terminal = Failure(
-                    (terminal.cause + cause).elect_defects()
-                    if isinstance(terminal, Failure)
-                    else cause
+                failure = Failure(
+                    (failure.cause + cause).elect_defects() if failure is not None else cause
                 )
 
     def observe(fiber: Fiber[B, E], i: int, paused: list[bool]) -> Observer:
@@ -807,30 +807,28 @@ def _run_window[A, B, E, R](
                 if paused[0]:
                     if (result := go()) is not None:
                         resume(result)
-                elif done and not live:
-                    resume(UNIT if terminal is None else terminal)
+                elif not can_start() and not live:
+                    resume(UNIT if failure is None else failure)
             except Exception as error:
                 resume(fail_defect(error))
 
         return on_exit
 
     def fail_defect(error: Exception) -> Effect[None, E, R]:
-        nonlocal terminal, done
+        nonlocal failure
         defect: Failure[E] = Failure(Cause.die(error))
-        terminal = defect
-        done = True
+        failure = defect
         if not live:
             return defect
         return uninterruptible(interrupt_all(list(live))).flat_map(
-            lambda _: defect if terminal is None else terminal
+            lambda _: defect if failure is None else failure
         )
 
     def on_cancel() -> Effect[None, E, R]:
-        nonlocal terminal
-        if terminal is None:
-            terminal = UNIT
+        nonlocal cancelled
+        cancelled = True
         return interrupt_all(list(live)).flat_map(
-            lambda _: terminal if isinstance(terminal, Failure) else UNIT
+            lambda _: failure if failure is not None else UNIT
         )
 
     try:

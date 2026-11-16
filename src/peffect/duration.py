@@ -184,6 +184,7 @@ _DURATION_REGEXP: Final = re.compile(
     rf"(-?[0-9]+(?:\.[0-9]+)?)[{_JS_SPACE}]+"
     r"(nanos?|micros?|millis?|seconds?|minutes?|hours?|days?|weeks?)"
 )
+_NANOS_PER_UNIT: Final = {"nano": 1, "micro": 1_000}
 _MILLIS_PER_UNIT: Final = {
     "milli": 1,
     "second": 1_000,
@@ -263,10 +264,8 @@ def from_input_unsafe(input: Input) -> Duration:
             if found is None:
                 return _invalid(input)
             text, unit = found.group(1), found.group(2).removesuffix("s")
-            if unit == "nano":
-                return nanos(_parse_nanos(text, 1))
-            if unit == "micro":
-                return nanos(_parse_nanos(text, 1_000))
+            if unit in _NANOS_PER_UNIT:
+                return nanos(_parse_nanos(text, _NANOS_PER_UNIT[unit]))
             return _from_millis_string(text, _MILLIS_PER_UNIT[unit])
         case _:  # the Input union is closed, but an untyped caller can pass anything
             return _invalid(input)

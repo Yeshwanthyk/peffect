@@ -579,3 +579,13 @@ formal proof. The unchanged kernel model abstracts messages, ownership and callb
 No cross-thread safety, retry/requeue guarantee, or Stream integration is claimed. The worker
 example uses Scope, services, typed job/source errors, deterministic gates and backpressure;
 it joins workers after await_ to include work already removed from the Queue.
+
+## Source maintainability gate
+
+`uv run python scripts/check_complexity.py` uses public `harrow-code==0.4.1` to check
+every source file, named hotspots, whole-file budgets, function inventories, callback-family
+burden and Effect/Layer's exact 0..20 pipe signatures. Missing/incomplete/unsupported evidence
+fails closed. Policy changes require whole-family review, including extracted helpers and
+alias/method writes that lexical analysis cannot see; see [COMPLEXITY.md](COMPLEXITY.md).
+This is a structural regression gate, not a behavior proof. Fresh pinned EffectJS probes in
+`tests/test_cleanup_parity.py` and Python-only adaptation checks keep those claims separate.

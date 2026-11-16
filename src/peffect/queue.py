@@ -332,23 +332,24 @@ class Queue[A, E = Never](Enqueue[A, E], Dequeue[A, E]):
         state = self._state
         if isinstance(state, _Done) or state.terminal is not None:
             return False
-        if len(self._messages) >= self.capacity:
-            if self.capacity <= 0 and len(state.takers) > (
-                0 if self.strategy == "sliding" else len(self._messages)
-            ):
-                self._messages.append(message)
-                if self.strategy == "sliding":
-                    self._trim(len(state.takers))
-                self.flush_unsafe()
-                return True
+        # Do not invert >= into <: NaN capacity follows the ordinary admission path.
+        if not len(self._messages) >= self.capacity:
+            self._messages.append(message)
+            self._schedule_takers()
+            return True
+        if self.capacity <= 0 and len(state.takers) > (
+            0 if self.strategy == "sliding" else len(self._messages)
+        ):
+            self._messages.append(message)
             if self.strategy == "sliding":
-                if self.capacity > 0:
-                    self._messages.popleft()
-                    self._messages.append(message)
-                return True
+                self._trim(len(state.takers))
+            self.flush_unsafe()
+            return True
+        if self.strategy != "sliding":
             return False
-        self._messages.append(message)
-        self._schedule_takers()
+        if self.capacity > 0:
+            self._messages.popleft()
+            self._messages.append(message)
         return True
 
     def offer(self, message: A) -> Effect[bool, Never, Never]:

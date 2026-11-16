@@ -23,10 +23,10 @@ from enum import Enum
 from typing import Never
 
 import pytest
-from peffect.ref import Ref
 
 from peffect import Die, Effect, Failure, Success, exit_, gen, run
 from peffect.option import Option, Some
+from peffect.ref import Ref
 
 current = "value"
 update = "new value"
