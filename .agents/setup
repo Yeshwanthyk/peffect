@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Idempotent development setup for Scotty's Debian/Node image and existing macOS hosts.
+set -euo pipefail
+root="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$root"
+uv_version=0.11.10
+bun_version=1.3.13
+python_version=3.13
+tools_dir="${HOME}/.local/share/peffect-tools"
+export PATH="$tools_dir/bin:$tools_dir/bun/bin:$PATH"
+
+as_root() {
+  if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo -n "$@"; fi
+}
+
+if [ "$(uname -s)" = Linux ] && command -v apt-get >/dev/null; then
+  missing=()
+  for pair in curl:curl unzip:unzip git:git node:nodejs java:openjdk-17-jre-headless; do
+    command -v "${pair%%:*}" >/dev/null || missing+=("${pair#*:}")
+  done
+  if [ "${#missing[@]}" -gt 0 ]; then
+    as_root apt-get update
+    as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates "${missing[@]}"
+  fi
+fi
+for tool in curl unzip git node java; do
+  command -v "$tool" >/dev/null || { echo "Missing $tool; install it and rerun .agents/setup" >&2; exit 1; }
+done
+# java may exist as a macOS launcher without an installed JRE.
+java -version
+mkdir -p "$tools_dir/bin"
+setup_tmp="$(mktemp -d)"
+trap 'rm -rf "$setup_tmp"' EXIT
+if ! uv --version 2>/dev/null | grep -q "^uv $uv_version\( \|$\)"; then
+  curl -fsSL "https://astral.sh/uv/$uv_version/install.sh" -o "$setup_tmp/uv.sh"
+  UV_UNMANAGED_INSTALL="$tools_dir/bin" sh "$setup_tmp/uv.sh"
+fi
+if [ "$(bun --version 2>/dev/null || true)" != "$bun_version" ]; then
+  curl -fsSL https://bun.com/install -o "$setup_tmp/bun.sh"
+  BUN_INSTALL="$tools_dir/bun" bash "$setup_tmp/bun.sh" "bun-v$bun_version"
+fi
+# Make tools visible to later Scotty turns, not just this script's child processes.
+if [ "$(uname -s)" = Linux ]; then
+  for tool in uv bun; do
+    tool_path="$(command -v "$tool")"
+    if [ "$tool_path" != "/usr/local/bin/$tool" ]; then
+      as_root ln -sfn "$tool_path" "/usr/local/bin/$tool"
+    fi
+  done
+fi
+
+# Initialize only a missing vendor checkout. Never reset an existing vendor tree.
+if [ ! -f vendor/effect-v4/packages/effect/package.json ]; then
+  git submodule update --init vendor/effect-v4
+fi
+expected_vendor="$(git ls-tree HEAD vendor/effect-v4 | awk '{print $3}')"
+actual_vendor="$(git -C vendor/effect-v4 rev-parse HEAD)"
+[ "$actual_vendor" = "$expected_vendor" ] || { echo "Vendor differs from gitlink; refusing to reset it" >&2; exit 1; }
+uv python install "$python_version"
+uv sync --locked --python "$python_version"
+(cd examples/parity && bun install --frozen-lockfile)
+uv run --no-sync python -c 'import pathlib, peffect, sys; assert sys.version_info[:2] == (3, 13); assert pathlib.Path(peffect.__file__).resolve() == pathlib.Path("src/peffect/__init__.py").resolve(); print("Python", sys.version.split()[0], "| peffect import OK")'
+uv --version
+bun --version
+node --version
+echo 'Ready: peffect library environment (no server or public URL required).'
+echo 'Verify: .claude/skills/verify-peffect/run.sh'
+echo 'Formal: .claude/skills/verify-formal-kernel/run.sh'
+echo 'Build: uv build'

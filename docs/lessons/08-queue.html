@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Queue: who owns the next job?</title>
+<style>
+body{font:16px/1.55 system-ui;max-width:960px;margin:40px auto;padding:0 24px;color:#172033;background:#f6f8fb}h1{font-size:32px}h2{margin-top:32px}pre{background:#172033;color:#e4eaf5;padding:20px;overflow:auto;border-radius:10px}table{border-collapse:collapse;width:100%;background:white}th,td{text-align:left;vertical-align:top;padding:12px;border-bottom:1px solid #dce3ed}.states{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.state{border:2px solid #607798;border-radius:12px;background:white;padding:18px;flex:1;min-width:170px}.state strong{display:block}.note{border-left:4px solid #307a89;padding:12px 18px;background:#e7f2f4}code{font-family:ui-monospace,monospace}
+</style></head><body>
+<h1>Queue: who owns the next job?</h1>
+<p>A bounded Queue decouples producers from workers while limiting buffered input. A producer that cannot fit its next message waits. Removing a message transfers ownership to the consumer; finishing that consumer’s later work is an application responsibility.</p>
+<div class="states" aria-label="Queue lifecycle"><div class="state"><strong>Open</strong>Accept input.<br>Workers consume FIFO.</div><span>→ end / fail / interrupt →</span><div class="state"><strong>Closing</strong>Reject new input.<br>Drain buffer and pending offers.</div><span>→ drained →</span><div class="state"><strong>Done</strong>Notify takers and awaiters.<br>Preserve first terminal outcome.</div></div>
+<p><code>shutdown</code> takes Open or Closing directly to Done, discards buffered jobs and returns unadmitted suffixes to producers. It preserves a Closing queue’s original terminal cause.</p>
+<pre>inbox = yield from Queue[Job, Done | SourceError].bounded(2)
+producer = yield from fork_scoped(
+    inbox.into(send_jobs(inbox)), start_immediately=True
+)
+workers = ...  # fork_scoped workers handle pull.catch_done
+
+yield from producer.join()
+yield from inbox.await_()   # no input remains in Queue
+for worker in workers:
+    yield from worker.join()  # processing removed jobs also finished</pre>
+<p><code>into</code> publishes the producer’s Exit. It ends on success, fails on failure, and never enqueues the producer’s return value. Its producer remains interruptible; terminal publication runs masked.</p>
+<h2>Choose an overflow policy</h2>
+<table><tr><th>Constructor</th><th>At capacity</th><th>Who owns the overflow?</th></tr><tr><td><code>bounded(n)</code></td><td>Effectful offer waits; unsafe offer rejects.</td><td>A parked producer owns its unadmitted suffix.</td></tr><tr><td><code>dropping(n)</code></td><td>Reject new overflow.</td><td>Caller receives False or the unaccepted suffix.</td></tr><tr><td><code>sliding(n)</code></td><td>Evict oldest buffered messages.</td><td>Policy explicitly discards older input.</td></tr><tr><td><code>unbounded()</code></td><td>Append FIFO.</td><td>Queue owns all buffered input.</td></tr></table>
+<p>Zero capacity is rendezvous: a read can consume one pending producer message. Waiting takers can provide transient handoff slots. Sliding at zero discards input without takers. <code>peek</code> only sees buffered messages; it does not reserve a pending rendezvous offer.</p>
+<h2>Batch reads are capacity-aware</h2>
+<p><code>take_n(5)</code> on a capacity-two Queue can return two messages. On Closing it can return a short remainder. <code>take_all</code> waits for at least one; <code>clear</code> and <code>poll</code> do not wait. Counts floor fractions and treat NaN/nonpositive values as zero; a completed Queue still reports its terminal outcome before considering zero bounds.</p>
+<p>Capacities deliberately follow the pinned vendor’s raw numeric behavior. Use nonnegative integers or unbounded in applications. Fractional, negative and NaN inputs have compatibility characterizations, including vendor quirks; they are outside the normal bounded-capacity guarantee.</p>
+<h2>Cancellation and completion</h2>
+<div class="note">A message removed by a receive reaches the first accepting continuation in that same operation, even when resuming a producer interrupts the consumer synchronously. That guarantee ends there: later processing, finalizers and effects can fail or be interrupted. There is no rollback or automatic requeue.</div>
+<p>Cancelling a parked producer withdraws only its unadmitted suffix; already admitted messages remain. Cancelling a taker removes its own registration. A scheduled wake asks a taker to retry—it does not reserve a particular message.</p>
+<p><code>Done</code> is normal completion in the typed error channel. <code>take</code> and <code>peek</code> retain it; <code>clear</code>, <code>collect</code> and <code>await_</code> exclude it while preserving real failures merged with it. <code>poll</code> returns None for empty or terminal; <code>Some(None)</code> still represents an actual None message. Canonical payload unions use <code>Done[X | Y]</code>; Pyright can retain a completion member when inferring exclusion from <code>Done[X] | Done[Y]</code>.</p>
+<h2>Scheduling and capabilities</h2>
+<p>Queue captures its creator’s dispatcher. Several offers share one queued taker release. <code>flush</code> wakes ready takers synchronously and leaves the scheduled task coalesced; it neither drains nor completes the Queue.</p>
+<p><code>Queue[A, E]</code> is invariant. The same object’s <code>as_enqueue()</code> view is contravariant in both A and E; <code>as_dequeue()</code> is covariant. Capability views restrict methods statically, not by copying the Queue.</p>
+<h2>Run the composition</h2>
+<pre>uv run python examples/queue_worker.py</pre>
+<p>The example provides a processor service, records typed job rejection, uses readiness gates to observe genuine backpressure, drains a scoped worker pool, interrupts blocked processing, and drains an admitted job before a typed producer failure. The processor resource closes after worker scopes.</p>
+<p>Evidence: source-anchored upstream ports, per-operation interruption/reentry sweeps, three independent ownership ledgers, actual vendor comparison and isolated mutation controls. These are bounded observations. The kernel model does not model Queue message ownership, and no cross-thread safety or Stream integration is claimed. See <a href="../QUEUE_SOURCE_MAP.md">the source map</a> and Q1–Q10 in <a href="../INVARIANTS.md">the invariant ledger</a>.</p>
+</body></html>

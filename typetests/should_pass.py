@@ -16,6 +16,7 @@ from peffect import (
     Closeable,
     Context,
     Deferred,
+    Done,
     Effect,
     Exit,
     Failure,
@@ -23,6 +24,7 @@ from peffect import (
     Layer,
     ManagedRuntime,
     MemoMap,
+    Queue,
     Reference,
     Scope,
     ScopeService,
@@ -68,6 +70,7 @@ from peffect import (
 from peffect import scope as current_scope  # Effect.scope
 from peffect.duration import Duration, seconds
 from peffect.option import Option, Some
+from peffect.queue import Dequeue, Enqueue, is_dequeue, is_enqueue, is_queue
 from peffect.scheduler import (
     MaxOpsBeforeYield,
     MixedScheduler,
@@ -733,9 +736,8 @@ def ref_type_contracts() -> None:
 
 
 def queue_prerequisite_type_contracts() -> None:
-    from peffect.pull import catch_done, done_exit_from_cause, filter_done
-
     from peffect import Done, done, suspend_exit
+    from peffect.pull import catch_done, done_exit_from_cause, filter_done
 
     assert_type(Done(), Done[None])
     assert_type(Done("leftover"), Done[str])
@@ -766,3 +768,91 @@ def queue_prerequisite_type_contracts() -> None:
         assert_type(done_exit_from_cause(Cause.fail(Done("left"))), Exit[str, Never])
 
     assert callable(checked)
+
+
+# Queue: capability variance and completion/error/environment channels.
+
+
+class QueueTypeService(Tag[int], key="queue/type-service"):
+    pass
+
+
+def queue_enqueue_contravariance(wide: Enqueue[object, object]) -> Enqueue[int, str]:
+    return wide
+
+
+def queue_dequeue_covariance(narrow: Dequeue[int, str]) -> Dequeue[object, object]:
+    return narrow
+
+
+def queue_channels(q: Queue[int, Done | str], ordinary: Queue[int, str], pure: Queue[int, Done]):
+    assert_type(q.take(), Effect[int, Done | str, Never])
+    assert_type(q.peek(), Effect[int, Done | str, Never])
+    assert_type(q.take_all(), Effect[list[int], Done | str, Never])
+    assert_type(q.take_n(2), Effect[list[int], Done | str, Never])
+    assert_type(q.take_between(1, 3), Effect[list[int], Done | str, Never])
+    assert_type(q.take_unsafe(), Exit[int, Done | str] | None)
+    assert_type(q.poll(), Effect[Some[int] | None, Never, Never])
+    assert_type(q.clear(), Effect[list[int], str, Never])
+    assert_type(q.collect(), Effect[list[int], str, Never])
+    assert_type(q.await_(), Effect[None, str, Never])
+    assert_type(pure.clear(), Effect[list[int], Never, Never])
+    assert_type(pure.collect(), Effect[list[int], Never, Never])
+    assert_type(pure.await_(), Effect[None, Never, Never])
+    assert_type(ordinary.clear(), Effect[list[int], str, Never])
+    assert_type(ordinary.collect(), Effect[list[int], str, Never])
+    assert_type(ordinary.await_(), Effect[None, str, Never])
+    assert_type(q.offer(1), Effect[bool, Never, Never])
+    assert_type(q.offer_all([1]), Effect[list[int], Never, Never])
+    assert_type(q.end(), Effect[bool, Never, Never])
+    assert_type(q.as_enqueue(), Enqueue[int, Done | str])
+    assert_type(q.as_dequeue(), Dequeue[int, Done | str])
+    assert_type(Queue[int, Done].bounded(1), Effect[Queue[int, Done], Never, Never])
+    q.fail_cause(Cause.fail("error"))
+
+
+def queue_producer_channels(
+    q: Queue[int, Done | str], producer: Effect[object, str, QueueTypeService]
+):
+    assert_type(q.into(producer), Effect[bool, Never, QueueTypeService])
+
+
+def queue_bottom(q: Queue[Never, Never]):
+    assert_type(q.take(), Effect[Never, Never, Never])
+    assert_type(q.clear(), Effect[list[Never], Never, Never])
+    assert_type(q.await_(), Effect[None, Never, Never])
+
+
+def queue_guards(value: object):
+    if is_queue(value):
+        assert_type(value, Queue[object, object])
+
+
+def queue_enqueue_guard(value: object):
+    if is_enqueue(value):
+        assert_type(value, Enqueue[object, object])
+
+
+def queue_dequeue_guard(value: object):
+    if is_dequeue(value):
+        assert_type(value, Dequeue[object, object])
+
+
+def queue_each_variance_axis(
+    ea: Enqueue[object, str],
+    ee: Enqueue[int, object],
+    da: Dequeue[int, str],
+    de: Dequeue[int, str],
+) -> tuple[Enqueue[int, str], Enqueue[int, str], Dequeue[object, str], Dequeue[int, object]]:
+    return ea, ee, da, de
+
+
+def queue_payload_completion(q: Queue[int, Done[str | int] | str]):
+    assert_type(q.clear(), Effect[list[int], str, Never])
+    assert_type(q.collect(), Effect[list[int], str, Never])
+    assert_type(q.await_(), Effect[None, str, Never])
+
+
+def queue_batch_input_type(writer: Enqueue[object, str]):
+    assert_type(writer.offer_all([1, 2]), Effect[list[object], Never, Never])
+    assert_type(writer.offer_all_unsafe([1, 2]), list[object])

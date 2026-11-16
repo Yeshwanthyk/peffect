@@ -690,34 +690,138 @@ def _for_each_concurrent[A, B, E, R](
 ) -> Effect[None, E, R] | None:
     """iterateConcurrentImpl with forEachConcurrent's step, internal/effect.ts:5160-5320.
 
-    `go` pumps items until the window is full or a terminal Exit is recorded. Ready Exits are
-    stepped inline; the first effect that is not one becomes an Async on the caller, and each
-    later one a child forked with the caller's mask. A child's observer steps its Exit, refills
-    a paused `go`, or after a terminal folds the child's non-interrupt reasons into it. None
-    means every item finished inline with no failure."""
-    index = 0
-    end = len(items)
-    done = False
-    parent: Fiber[Any, Any] | None = None
-    fibers: dict[Fiber[Any, Any], None] = {}
-    resume: Resume[None, E, R] | None = None
-    terminal: Exit[None, E] | None = None
-    effect: Effect[B, E, R] | None = None  # the item effect pending while the Async starts
+    Ready Exits are stepped inline, with no fiber. The first effect that is not one moves the
+    rest of the traversal onto the caller as an Async (`_run_window`). None means every item
+    finished inline with no failure."""
 
-    def step(exit_: Exit[B, E], i: int) -> Failure[E] | None:
-        if isinstance(exit_, Failure):
-            return exit_
-        out[i] = exit_.value
-        return None
+    def on_caller(index: int, first: Effect[B, E, R]) -> Effect[None, E, R]:
+        return WithFiber(
+            lambda parent: Async(
+                lambda resume: _run_window(items, f, out, concurrency, index, first, parent, resume)
+            )
+        )
+
+    for index, item in enumerate(items):
+        eff = f(item, index)
+        if not isinstance(eff, (Success, Failure)):
+            return on_caller(index, eff)
+        if (failure := _step(out, index, eff)) is not None:
+            return failure
+    return None
+
+
+def _step[B, E](out: list[Any], index: int, exit_: Exit[B, E]) -> Failure[E] | None:
+    """forEachConcurrent's step: keep a value at its input index; a failure is the terminal."""
+    if isinstance(exit_, Failure):
+        return exit_
+    out[index] = exit_.value
+    return None
+
+
+def _run_window[A, B, E, R](
+    items: list[A],
+    f: Callable[[A, int], Effect[B, E, R]],
+    out: list[Any],
+    concurrency: float,
+    start: int,
+    first: Effect[B, E, R],
+    parent: Fiber[Any, Any],
+    resume: Resume[None, E, R],
+) -> Effect[None, E, R] | None:
+    """The Async register of a concurrent traversal, on the caller `parent`, from item `start`
+    whose effect `first` is already built. Returns the cancel effect, or None once resumed.
+
+    State: `index` is the next item to start, `live` the workers still running, `terminal` the
+    first failure (or UNIT after a cancel) with later non-interrupt reasons folded in, and
+    `done` says no more items will start. `pump` starts items, each a child forked with the
+    caller's mask, until the window is full. A worker's observer records its Exit, then refills
+    the window if its pump paused. The caller resumes once `done` and no worker is live."""
+    index = start
+    end = len(items)
+    pending: Effect[B, E, R] | None = first
+    live: dict[Fiber[Any, Any], None] = {}
+    terminal: Exit[None, E] | None = None
+    done = False
+
+    def pump() -> bool:
+        """Start items until the window is full (True) or no more will start (False)."""
+        nonlocal index, terminal, pending
+        paused = [False]  # this call's: its observers refill only once it has paused
+        while terminal is None and index < end:
+            eff = pending if pending is not None else f(items[index], index)
+            pending = None
+            if isinstance(eff, (Success, Failure)):
+                terminal = _step(out, index, eff)
+            else:
+                fiber = _start(None, eff, parent.context, interruptible=parent.interruptible)
+                if fiber.exit is not None:
+                    terminal = _step(out, index, fiber.exit)
+                else:
+                    live[fiber] = None
+                    fiber.add_observer(observe(fiber, index, paused))
+                    if len(live) >= concurrency:
+                        paused[0] = True
+                        index += 1
+                        return True
+            index += 1
+        return False
+
+    def finish() -> Exit[None, E] | None:
+        """No more items will start. After a terminal, interrupt the live workers. Returns the
+        Exit to resume the caller with, or None while a worker is still live."""
+        nonlocal done
+        done = True
+        if live:
+            if terminal is not None:
+                for fiber in list(live):
+                    fiber.interrupt_unsafe(parent.id)
+            return None
+        return UNIT if terminal is None else terminal
+
+    def go() -> Exit[None, E] | None:
+        return None if pump() else finish()
+
+    def record(exit_: Exit[B, E], i: int) -> None:
+        """Fold one worker's Exit into the run: keep its value, or make its failure the
+        terminal and stop the rest. After a terminal, only its non-interrupt reasons count."""
+        nonlocal terminal
+        if terminal is None:
+            terminal = _step(out, i, exit_)
+            if terminal is not None:
+                finish()
+        elif isinstance(exit_, Failure):
+            kept = tuple(r for r in exit_.cause.reasons if not isinstance(r, Interrupt))
+            if kept:
+                cause = Cause(kept)
+                terminal = Failure(
+                    (terminal.cause + cause).elect_defects()
+                    if isinstance(terminal, Failure)
+                    else cause
+                )
+
+    def observe(fiber: Fiber[B, E], i: int, paused: list[bool]) -> Observer:
+        def on_exit(exit_: Exit[B, E]) -> None:
+            live.pop(fiber, None)
+            try:
+                record(exit_, i)
+                if paused[0]:
+                    if (result := go()) is not None:
+                        resume(result)
+                elif done and not live:
+                    resume(UNIT if terminal is None else terminal)
+            except Exception as error:
+                resume(fail_defect(error))
+
+        return on_exit
 
     def fail_defect(error: Exception) -> Effect[None, E, R]:
         nonlocal terminal, done
         defect: Failure[E] = Failure(Cause.die(error))
         terminal = defect
         done = True
-        if not fibers:
+        if not live:
             return defect
-        return uninterruptible(interrupt_all(list(fibers))).flat_map(
+        return uninterruptible(interrupt_all(list(live))).flat_map(
             lambda _: defect if terminal is None else terminal
         )
 
@@ -725,94 +829,19 @@ def _for_each_concurrent[A, B, E, R](
         nonlocal terminal
         if terminal is None:
             terminal = UNIT
-        return interrupt_all(list(fibers)).flat_map(
+        return interrupt_all(list(live)).flat_map(
             lambda _: terminal if isinstance(terminal, Failure) else UNIT
         )
 
-    def observe(fiber: Fiber[B, E], i: int, paused: list[bool]) -> Observer:
-        def on_exit(exit_: Exit[B, E]) -> None:
-            nonlocal terminal
-            assert resume is not None
-            fibers.pop(fiber, None)
-            try:
-                if terminal is not None:
-                    if isinstance(exit_, Failure):
-                        kept = tuple(r for r in exit_.cause.reasons if not isinstance(r, Interrupt))
-                        if kept:
-                            cause = Cause(kept)
-                            terminal = Failure(
-                                (terminal.cause + cause).elect_defects()
-                                if isinstance(terminal, Failure)
-                                else cause
-                            )
-                elif (result := step(exit_, i)) is not None:
-                    terminal = result
-                    go()
-                if paused[0]:
-                    if (eff := go()) is not None:
-                        resume(eff)
-                elif done and not fibers:
-                    resume(UNIT if terminal is None else terminal)
-            except Exception as error:
-                resume(fail_defect(error))
-
-        return on_exit
-
-    def go() -> Effect[None, E, R] | None:
-        nonlocal index, done, terminal, effect
-        paused = [False]  # this call's: its observers refill only once it has paused
-        while terminal is None and index < end:
-            eff = effect if effect is not None else f(items[index], index)
-            if isinstance(eff, (Success, Failure)):
-                terminal = step(eff, index)
-                if terminal is not None:
-                    break
-            elif parent is None:
-                return WithFiber(lambda p, first=eff: Async(lambda cb: register(p, first, cb)))
-            else:
-                effect = None
-                fiber = _start(None, eff, parent.context, interruptible=parent.interruptible)
-                if fiber.exit is not None:
-                    terminal = step(fiber.exit, index)
-                    if terminal is not None:
-                        break
-                else:
-                    fibers[fiber] = None
-                    fiber.add_observer(observe(fiber, index, paused))
-                    if len(fibers) >= concurrency:
-                        paused[0] = True
-                        index += 1
-                        return None
-            index += 1
-        done = True
-        if terminal is not None:
-            if fibers:
-                assert parent is not None
-                for fiber in list(fibers):
-                    fiber.interrupt_unsafe(parent.id)
-                return None
-            if resume is not None or isinstance(terminal, Failure):
-                return terminal
-        elif resume is not None and not fibers:
-            resume(UNIT)
+    try:
+        result = go()
+    except Exception as error:
+        resume(fail_defect(error))
         return None
-
-    def register(
-        p: Fiber[Any, Any], first: Effect[B, E, R], cb: Resume[None, E, R]
-    ) -> Effect[None, E, R] | None:
-        nonlocal parent, effect, resume
-        parent, effect, resume = p, first, cb
-        try:
-            result = go()
-        except Exception as error:
-            cb(fail_defect(error))
-            return None
-        if result is not None:
-            cb(result)
-            return None
-        return Suspend(on_cancel)
-
-    return go()
+    if result is not None:
+        resume(result)
+        return None
+    return Suspend(on_cancel)
 
 
 # ================================================================================================
@@ -824,13 +853,61 @@ def race_all[A, E, R](effects: Iterable[Effect[A, E, R]]) -> Effect[A, E, R]:
     """Run every effect at once; continue with the first success. If all fail, fail with every
     reason in completion order, defects elected. The rest are interrupted as soon as one wins.
     Effect v4: raceAll, internal/effect.ts:1688-1740."""
-    return _race(effects, first_exit=False)
+
+    def start(parent: Fiber[Any, Any], live: _Racers[A, E], resume: Resume[A, E, R]) -> None:
+        racers = list(effects)  # every effect is read before the first fork (Arr.fromIterable)
+        failures: list[Cause[E]] = []
+        exited = 0
+        won = False
+
+        def on_exit(exit_: Exit[A, E]) -> None:
+            nonlocal exited, won
+            exited += 1
+            if isinstance(exit_, Failure):
+                failures.append(exit_.cause)
+                if exited >= len(racers):
+                    reasons = tuple(r for c in failures for r in c.reasons)
+                    resume(Failure(Cause(reasons).elect_defects()))
+                return
+            winner, won = not won, True
+            resume(exit_)
+            if winner:
+                _interrupt_losers(live, parent)
+
+        for eff in racers:
+            _fork_racer(parent, live, eff, on_exit)
+            if won:  # a racer won while the racers start: fork no more
+                break
+
+    return _racing(start)
 
 
 def race_all_first[A, E, R](effects: Iterable[Effect[A, E, R]]) -> Effect[A, E, R]:
     """Run every effect at once; continue as the first one ends, success or failure.
     Effect v4: raceAllFirst, internal/effect.ts:1743-1774."""
-    return _race(effects, first_exit=True)
+
+    def start(parent: Fiber[Any, Any], live: _Racers[A, E], resume: Resume[A, E, R]) -> None:
+        done = False
+
+        def on_exit(exit_: Exit[A, E]) -> None:
+            nonlocal done
+            winner, done = not done, True
+            resume(exit_)
+            if winner:
+                _interrupt_losers(live, parent)
+
+        # Read lazily; one extra item may be read after settlement, but is not forked.
+        iterator = iter(effects)
+        for eff in iterator:
+            if done:
+                # JS for-of closes the iterator on break (IteratorClose).
+                close = getattr(iterator, "close", None)
+                if close is not None:
+                    close()
+                break
+            _fork_racer(parent, live, eff, on_exit)
+
+    return _racing(start)
 
 
 def race[A, E, R](self: Effect[A, E, R], that: Effect[A, E, R]) -> Effect[A, E, R]:
@@ -845,73 +922,52 @@ def race_first[A, E, R](self: Effect[A, E, R], that: Effect[A, E, R]) -> Effect[
     return race_all_first((self, that))
 
 
-def _race[A, E, R](effects: Iterable[Effect[A, E, R]], *, first_exit: bool) -> Effect[A, E, R]:
-    """The shared body of raceAll / raceAllFirst.
+type _Racers[A, E] = dict[Fiber[A, E], None]  # live racers in fork order
 
-    Racers are daemons started at once, interruptible whatever the caller's mask, in the
-    caller's context (forkUnsafe(parent, eff, true, true, false), :5614). An OnExit frame under
-    the race interrupts and awaits whatever racers are still live when the race ends, masked,
-    so the race returns only after its losers' cleanup (:1704). The winner is resumed before
-    the losers are interrupted, so a loser's interrupt can't settle the race (:1776-1786). A
-    racer that settles the race while the racers start stops later ones from being forked."""
+
+def _racing[A, E, R](
+    start: Callable[[Fiber[Any, Any], _Racers[A, E], Resume[A, E, R]], None],
+) -> Effect[A, E, R]:
+    """The frame both races share: `start` forks the racers from an Async on the caller, and an
+    OnExit frame under it interrupts and awaits whatever racers are still live when the race
+    ends, masked, so the race returns only after its losers' cleanup (:1704). The frame reads
+    `live` on exit, so it includes racers forked after the race settled."""
 
     def go(parent: Fiber[Any, Any]) -> Effect[A, E, R]:
-        fibers: dict[Fiber[A, E], None] = {}  # live racers in fork order
+        live: _Racers[A, E] = {}
 
         def cleanup(_exit: Exit[Any, Any], _fiber: Fiber[Any, Any]) -> AnyEffect | None:
-            return interrupt_all(list(fibers)) if fibers else None
+            return interrupt_all(list(live)) if live else None
 
-        def register(resume: Resume[A, E, R]) -> None:
-            racers: Iterable[Effect[A, E, R]] = effects  # raceAllFirst reads lazily
-            total = 0
-            if not first_exit:
-                racers = listed = list(effects)  # raceAll reads all first (Arr.fromIterable)
-                total = len(listed)
-            settled = 0
-            done = False
-            failures: list[Cause[E]] = []
-
-            def win(exit_: Exit[A, E]) -> None:
-                nonlocal done
-                winner = not done
-                done = True
-                resume(exit_)
-                if winner:
-                    for loser in list(fibers):
-                        loser.interrupt_unsafe(parent.id)
-
-            def observe(fiber: Fiber[A, E]) -> Observer:
-                def on_exit(exit_: Exit[A, E]) -> None:
-                    nonlocal settled
-                    fibers.pop(fiber, None)
-                    settled += 1
-                    if first_exit or isinstance(exit_, Success):
-                        win(exit_)
-                        return
-                    failures.append(exit_.cause)
-                    if settled >= total:
-                        reasons = tuple(r for c in failures for r in c.reasons)
-                        resume(Failure(Cause(reasons).elect_defects()))
-
-                return on_exit
-
-            iterator = iter(racers)
-            for eff in iterator:
-                if first_exit and done:
-                    # JS for-of closes the iterator on break (IteratorClose).
-                    close = getattr(iterator, "close", None)
-                    if close is not None:
-                        close()
-                    break
-                fiber = _start(None, eff, parent.context, parent, True, True)
-                fibers[fiber] = None
-                fiber.add_observer(observe(fiber))
-                if done and not first_exit:  # raceAllFirst checks before the fork instead
-                    break
-
-        return OnExit(Async(register), cleanup)
+        return OnExit(Async(lambda resume: start(parent, live, resume)), cleanup)
 
     return WithFiber(go)
+
+
+def _fork_racer[A, E, R](
+    parent: Fiber[Any, Any],
+    live: _Racers[A, E],
+    eff: Effect[A, E, R],
+    on_exit: Callable[[Exit[A, E]], None],
+) -> None:
+    """Start a racer: a daemon, interruptible whatever the caller's mask, in the caller's
+    context (forkUnsafe(parent, eff, true, true, false), :5614). It leaves `live` before
+    `on_exit` sees its Exit."""
+    fiber = _start(None, eff, parent.context, parent, True, True)
+    live[fiber] = None
+
+    def observer(exit_: Exit[A, E]) -> None:
+        live.pop(fiber, None)
+        on_exit(exit_)
+
+    fiber.add_observer(observer)
+
+
+def _interrupt_losers(live: _Racers[Any, Any], parent: Fiber[Any, Any]) -> None:
+    """Interrupt the losers as soon as the race settles. Callers resume the winner first, so a
+    loser's interrupt can't settle the race (interruptRaceLosers, :1776-1786)."""
+    for loser in list(live):
+        loser.interrupt_unsafe(parent.id)
 
 
 type FiberStartHook = Callable[[Fiber[Any, Any]], object]

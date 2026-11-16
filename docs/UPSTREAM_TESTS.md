@@ -476,3 +476,35 @@ Adaptations: None is the void leftover; nominal `is_done` replaces the JS brand 
 `done_exit_from_cause` returns Exit[L, E]. `catch_done` is data-first. Positive type fixtures
 pin Done exclusion and leftover types; negative blocks 127-133 pin retained channels.
 Remaining Pull operators, type utility spellings and Stream integration remain deferred.
+
+## Queue — complete operational surface (implementation, review pending)
+
+`tests/test_queue_upstream.py` ports Queue.test.ts:18–990; `test_queue_interleavings.py`
+replaces guessed yield padding with observed-operation injection and manual dispatcher
+settling. `test_queue_props.py` supplies three independent per-ID ownership ledgers;
+`test_queue_worker.py` runs the composed example as a subprocess. Complete export inventory,
+per-test source anchors and adaptations: [QUEUE_SOURCE_MAP.md](QUEUE_SOURCE_MAP.md).
+
+All 39 value operations and three model types are present, in repository method style.
+Only state metadata and Pipeable/Inspectable/JSON spellings are excluded. Stream.fromQueue
+scenarios assert their Queue drain/terminal contract directly; Stream integration remains
+in its module. Source-derived additions cover into, raw capacity quirks, forced interruption
+inside producer resumption, callback defects and live waiter insertion during iteration.
+
+Corrections to committed red tests preserve their behavioral assertions: unsafe Exits are
+checked by value/cause because Python Exit equality is identity; the offerAll registration
+baseline is captured before shutdown cleanup so it measures only registration operations.
+A mutation survivor exposed sparse generation of an uncancelled zero-capacity pending batch;
+`capacity=0; batch(3)` is now an explicit property example, with the original assertions intact.
+
+Normal generated capacities are 0, 1, 2 and infinity. Raw fractional/NaN/negative compatibility
+is characterized separately. Negative-capacity take can retry indefinitely upstream and is
+not started. Pyright exclusion uses canonical payload unions `Done[X | Y]`; separately
+instantiated `Done[X] | Done[Y]` may retain a Done member statically despite correct runtime
+filtering. Positive gates and negative blocks 134–154 pin the remaining channel, capability,
+variance and into contracts. No cast, suppression or extra kernel API was added.
+
+Author evidence: 196 real vendor/Python traces, 4824 matching snapshots, controlled operation
+sweeps and isolated package mutations (including property-only green controls). Sensitivity
+artifacts retain the initial survivor before promoting its minimal regression. These checks
+are bounded, and do not constitute a formal proof or independent review acceptance.

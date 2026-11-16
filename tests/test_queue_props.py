@@ -253,6 +253,7 @@ commands = st.lists(
 )
 
 
+@example(0, [("batch", 3)])
 @example(0, [("batch", 3), ("end", 0), ("poll", 0), ("cancel", 0), ("clear", 0)])
 @example(1, [("batch", 4), ("single", 0), ("poll", 0), ("shutdown", 0)])
 @example(2, [("batch", 4), ("single", 0), ("fail", 0), ("clear", 0), ("clear", 0), ("clear", 0)])

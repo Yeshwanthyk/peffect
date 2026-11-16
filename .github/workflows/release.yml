@@ -1,0 +1,67 @@
+name: Publish to PyPI
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pypi-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+        with:
+          version: '0.11.10'
+          python-version: '3.13'
+      - name: Check tag matches package version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          uv run --no-project python - <<'PY'
+          import os
+          import tomllib
+          from pathlib import Path
+
+          version = tomllib.loads(Path('pyproject.toml').read_text())['project']['version']
+          if os.environ['RELEASE_TAG'] != f'v{version}':
+              raise SystemExit(f'Tag must be v{version}')
+          PY
+      - name: Build wheel and source distribution
+        run: uv build --no-sources
+      - name: Install and smoke-test the built wheel
+        run: |
+          smoke_dir=$(mktemp -d)
+          uv venv --python 3.13 "$smoke_dir/venv"
+          uv pip install --python "$smoke_dir/venv/bin/python" dist/*.whl
+          "$smoke_dir/venv/bin/python" -I - <<'PY'
+          import asyncio
+          import importlib.metadata
+          import os
+          from pathlib import Path
+
+          import peffect
+          from peffect import run, succeed
+
+          assert asyncio.run(run(succeed(42))) == 42
+          assert Path(peffect.__file__).with_name('py.typed').is_file()
+          assert importlib.metadata.version('peffect') == os.environ['RELEASE_TAG'][1:]
+          print('Installed wheel: effect execution, version and typing marker OK')
+          PY
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+      - name: Publish with PyPI Trusted Publishing
+        run: uv publish --trusted-publishing always

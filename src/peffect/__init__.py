@@ -88,6 +88,7 @@ from peffect.layer import CurrentMemoMap, Layer, MemoMap, provide_layer
 from peffect.managed_runtime import ManagedRuntime
 from peffect.option import Option, Some
 from peffect.pull import done
+from peffect.queue import Dequeue, Enqueue, Queue
 from peffect.ref import Ref
 from peffect.resources import acquire_release, acquire_use_release, add_finalizer
 from peffect.scheduler import MaxOpsBeforeYield, PreventSchedulerYield, Scheduler
@@ -116,10 +117,12 @@ __all__ = [
     "CurrentMemoMap",
     "DefectError",
     "Deferred",
+    "Dequeue",
     "Die",
     "Do",
     "Done",
     "Effect",
+    "Enqueue",
     "Exit",
     "Fail",
     "Failure",
@@ -137,6 +140,7 @@ __all__ = [
     "MixedScheduler",
     "Option",
     "PreventSchedulerYield",
+    "Queue",
     "Ref",
     "Reference",
     "RootRunner",

@@ -110,5 +110,24 @@ rollback. Use immutable replacement values when rollback of callback-side mutati
 Use `suspend_exit` when a destructive synchronous read returns an Exit that must reach its
 first consumer in the same operation; return nonterminal effects to wait normally. For
 end-of-input, use `Done` in E and `peffect.pull.catch_done`: it preserves real failures merged
-with completion. The remaining Pull surface and Queue are separate units. Contracts and
-proof limits: `docs/INVARIANTS.md`, QP1-QP4.
+with completion. The remaining Pull surface belongs to the Stream lane. Contracts and proof limits:
+`docs/INVARIANTS.md`, QP1-QP4.
+
+
+## Queue workers
+
+Create `Queue[Job, Done | SourceError].bounded(2)` for backpressure. Send with `offer` /
+`offer_all`; `into(producer)` publishes the producer's terminal outcome. Read with `take`
+or batches, and handle completion with `pull.catch_done`. End closes admission and drains;
+shutdown discards buffered work. Use `fork_scoped` and join workers after `await_()` because
+drained input can still be processing. Runnable composition: `examples/queue_worker.py`;
+source map and edge cases: `docs/QUEUE_SOURCE_MAP.md`; invariants Q1-Q10, lesson 08.
+
+- An interrupted receive may already have delivered its message; later processing is not
+  rolled back or automatically requeued. Track application acknowledgments when required.
+- A zero-capacity queue rendezvouses; peek only sees buffered handoffs. take_n above capacity
+  may return fewer than n, and Closing permits short batches.
+- Keep raw capacity compatibility separate from normal bounded guarantees. Use nonnegative
+  integer capacity (or unbounded) in applications; counts are normalized by the primitive.
+- Completion payload unions type-check as `Done[X | Y]`; Pyright's exclusion inference for
+  `Done[X] | Done[Y]` can retain a Done member even though runtime filtering removes both.

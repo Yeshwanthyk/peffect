@@ -83,9 +83,8 @@ def interrupted(fiber: Fiber[Any, Any]) -> None:
 
 def test_constructors_guards_and_same_object_capability_views():
     """37-79; Queue.ts:429-644,1812-1927. All five constructors and guards."""
-    from peffect.queue import is_dequeue, is_enqueue, is_queue
-
     from peffect import Queue
+    from peffect.queue import is_dequeue, is_enqueue, is_queue
 
     h = Harness()
     for effect, capacity in [
@@ -397,10 +396,12 @@ def test_poll_preserves_some_none_and_swallows_terminal_failures_only_as_empty()
     assert h.value(q.offer(None)) is True
     assert h.value(q.poll()) == Some(None)
     q.offer_unsafe(7)
-    assert q.take_unsafe() == Success(7)
+    taken = q.take_unsafe()
+    assert isinstance(taken, Success) and taken.value == 7
     h.value(q.fail("boom"))
     assert h.value(q.poll()) is None
-    assert q.take_unsafe() == Failure(Cause.fail("boom"))
+    terminal = q.take_unsafe()
+    assert isinstance(terminal, Failure) and terminal.cause == Cause.fail("boom")
 
 
 def test_peek_waits_without_removing_and_ignores_pending_rendezvous_offer():
@@ -689,3 +690,33 @@ def test_zero_capacity_all_strategies_can_handoff_to_registered_taker(
     successful(offered, [] if batch else True)
     successful(taker, 1)
     assert q.size_unsafe() == 0
+
+
+@pytest.mark.parametrize("value", [True, False, None, 123])
+def test_into_ignores_every_producer_success_value(value: object):
+    """Queue.ts:1987: onSuccess always calls end, including boolean results."""
+    h = Harness()
+    q = h.queue()
+    successful(h.spawn(q.into(succeed(value))), True)
+    failed(h.spawn(q.take()), Cause.fail(Done()))
+    assert q.size_unsafe() == 0
+
+
+def test_fractional_sliding_trims_a_normalized_removal_count():
+    """Queue.ts:858-864 delegates to MutableList.ts:516 (floor, not ceil)."""
+    h = Harness()
+    q = h.queue(0.5, "sliding")
+    assert q.offer_all_unsafe([1, 2, 3]) == []
+    assert h.value(q.clear()) == [3]
+
+
+def test_nan_capacity_uses_js_falsey_readiness_and_still_schedules_empty_batch():
+    """Queue.ts:868-882,2052-2056: NaN <= 0 is false; NaN || 1 is one."""
+    h = Harness()
+    q = h.queue(nan)
+    taker = h.spawn(q.take_n(5))
+    assert q.offer_all_unsafe([]) == []
+    assert len(h.scheduler.tasks) == 1
+    assert q.offer_unsafe(1) is True
+    h.pump()
+    successful(taker, [1])

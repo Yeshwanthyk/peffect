@@ -43,9 +43,11 @@ from peffect import (
     timeout_option,
     timeout_or_else,
 )
+from peffect.cause import Done
 from peffect.clock import current_time_millis
 from peffect.logger import log_with_level
 from peffect.option import Option, Some
+from peffect.queue import Dequeue, Enqueue, Queue
 from peffect.scheduler import MaxOpsBeforeYield, MixedScheduler, SchedulerService, with_dispatcher
 from peffect.testing import TestClock, TestClockService
 
@@ -189,9 +191,9 @@ def strategy_replaced(service: ScopeService) -> None:
 
 async def resource_without_scope() -> None:
     # 23. RESOURCE_SCOPE_MISSING: only Scope remains after supplying the release dependency
-    await peffect.run(provide(Log.context("log"))(
-        acquire_release(succeed(1), lambda _a, _ex: Log().use())
-    ))
+    await peffect.run(
+        provide(Log.context("log"))(acquire_release(succeed(1), lambda _a, _ex: Log().use()))
+    )
 
 
 async def resource_without_release_dependency() -> None:
@@ -201,9 +203,7 @@ async def resource_without_release_dependency() -> None:
 
 async def finalizer_without_scope() -> None:
     # 25. FINALIZER_SCOPE_MISSING: supplying Log leaves Scope outstanding
-    await peffect.run(provide(Log.context("log"))(
-        add_finalizer(lambda _ex: Log().use().as_(None))
-    ))
+    await peffect.run(provide(Log.context("log"))(add_finalizer(lambda _ex: Log().use().as_(None))))
 
 
 async def finalizer_without_dependency() -> None:
@@ -219,9 +219,9 @@ _release_lost: Effect[int, Never, Never] = acquire_use_release(
 
 async def use_release_without_dependency() -> None:
     # 28. USE_RELEASE_DEPENDENCY_MISSING: release services are required without a Scope
-    await peffect.run(acquire_use_release(
-        succeed(1), lambda a: succeed(a), lambda _a, _ex: Log().use().as_(None)
-    ))
+    await peffect.run(
+        acquire_use_release(succeed(1), lambda a: succeed(a), lambda _a, _ex: Log().use().as_(None))
+    )
 
 
 # 29. RESOURCE_VALUE_LOST: acquire_release keeps the acquired value type
@@ -263,7 +263,6 @@ _deferred.done(sync(lambda: 1))
 _deferred_error_lost: Effect[int, Never, Never] = _deferred.await_()
 
 
-
 def deferred_value_cannot_narrow(cell: Deferred[object, NotFound]) -> None:
     # 40. DEFERRED_VALUE_NOT_CONTRAVARIANT: a broader cell cannot promise narrower reads
     _narrow: Deferred[int, NotFound] = cell
@@ -272,7 +271,6 @@ def deferred_value_cannot_narrow(cell: Deferred[object, NotFound]) -> None:
 def deferred_error_cannot_narrow(cell: Deferred[int, Exception]) -> None:
     # 41. DEFERRED_ERROR_NOT_CONTRAVARIANT: broader failures cannot become NotFound-only
     _narrow: Deferred[int, NotFound] = cell
-
 
 
 def bulk_channels_cannot_disappear(target: Fiber[int, NotFound]) -> None:
@@ -427,9 +425,10 @@ async def parity_application_mistakes(
     # 82. COMPOSED_MISSING_SERVICE: Checkout must still be provided
     await peffect.run_exit(composed.place_or_pending(composed.Order(1)))
     # 83. COMPOSED_WRONG_PAYMENT_ERROR: stock errors do not belong to Payments
-    Layer.succeed(composed.Payments, composed.PaymentsService(
-        lambda _: fail(composed.OutOfStock("book"))
-    ))
+    Layer.succeed(
+        composed.Payments, composed.PaymentsService(lambda _: fail(composed.OutOfStock("book")))
+    )
+
 
 def lifecycle_mistakes() -> None:
     owner = Scope.make_unsafe()
@@ -641,9 +640,8 @@ def ref_type_mistakes() -> None:
 
 
 def queue_prerequisite_type_mistakes() -> None:
-    from peffect.pull import catch_done
-
     from peffect import Done, done, suspend_exit
+    from peffect.pull import catch_done
 
     def handle(leftover: str) -> Effect[int, RaceErrB, RaceB]:
         return fail(RaceErrB(leftover))
@@ -667,3 +665,67 @@ def queue_prerequisite_type_mistakes() -> None:
     _no_error: Effect[int, Never, RaceA] = suspend_exit(race_left)
     # 133. SUSPEND_EXIT_REQUIREMENT_LOST
     _no_requirement: Effect[int, RaceErrA, Never] = suspend_exit(race_left)
+
+
+def queue_operational_type_mistakes(
+    q: "Queue[int, str]",
+    completed: "Queue[int, Done]",
+    write: "Enqueue[int, str]",
+    read: "Dequeue[int, str]",
+    narrow_write: "Enqueue[int, str]",
+    wide_read: "Dequeue[object, object]",
+    producer: Effect[object, str, Never],
+) -> None:
+    # 134. QUEUE_MESSAGE_AND_ERROR_INVARIANCE
+    _wide_queue: Queue[object, object] = q
+    # 135. ENQUEUE_CONTRAVARIANCE_DIRECTION
+    _wide_writer: Enqueue[object, object] = narrow_write
+    # 136. DEQUEUE_COVARIANCE_DIRECTION
+    _narrow_reader: Dequeue[int, str] = wide_read
+    # 137. QUEUE_END_REQUIRES_DONE
+    q.end()
+    # 138. QUEUE_END_UNSAFE_REQUIRES_DONE
+    q.end_unsafe()
+    # 139. QUEUE_INTO_REQUIRES_DONE
+    q.into(succeed(None))
+    # 140. QUEUE_INTO_ERROR_SUBSET
+    completed.into(producer)
+    # 141. QUEUE_FAIL_ERROR_TYPE
+    completed.fail("wrong")
+    # 142. QUEUE_OFFER_MESSAGE_TYPE
+    q.offer("wrong")
+    # 143. ENQUEUE_HAS_NO_TAKE
+    write.take()
+    # 144. DEQUEUE_HAS_NO_OFFER
+    read.offer(1)
+    # 145. QUEUE_TAKE_RETAINS_DONE
+    _bad_take: Effect[int, Never, Never] = completed.take()
+    # 146. QUEUE_CLEAR_RETAINS_ORDINARY_ERROR
+    _bad_clear: Effect[list[int], Never, Never] = q.clear()
+    # 147. QUEUE_AWAIT_RETAINS_ORDINARY_ERROR
+    _bad_await: Effect[None, Never, Never] = q.await_()
+
+
+def queue_each_variance_mistake(
+    q: Queue[int, str],
+    ea: Enqueue[int, str],
+    ee: Enqueue[int, str],
+    da: Dequeue[object, str],
+    de: Dequeue[int, object],
+    required: Effect[object, str, RaceA],
+    target: Queue[int, str | Done],
+):
+    # 148. QUEUE_MESSAGE_INVARIANCE_ALONE
+    _qa: Queue[object, str] = q
+    # 149. QUEUE_ERROR_INVARIANCE_ALONE
+    _qe: Queue[int, object] = q
+    # 150. ENQUEUE_MESSAGE_CONTRAVARIANCE_ALONE
+    _ea: Enqueue[object, str] = ea
+    # 151. ENQUEUE_ERROR_CONTRAVARIANCE_ALONE
+    _ee: Enqueue[int, object] = ee
+    # 152. DEQUEUE_MESSAGE_COVARIANCE_ALONE
+    _da: Dequeue[int, str] = da
+    # 153. DEQUEUE_ERROR_COVARIANCE_ALONE
+    _de: Dequeue[int, str] = de
+    # 154. QUEUE_INTO_REQUIREMENT_RETAINED
+    _no_requirement: Effect[bool, Never, Never] = target.into(required)

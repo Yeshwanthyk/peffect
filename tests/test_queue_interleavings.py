@@ -168,8 +168,9 @@ def test_capacity_release_at_every_offer_all_registration_boundary_cannot_be_los
             assert h.value(q.clear()) == ([1] if capacity else [])
         else:
             assert producer.exit is None
+        registration_checks = seen
         q.shutdown_unsafe()
-        return seen, bool(fired)
+        return registration_checks, bool(fired)
 
     boundaries, _ = scenario(None)
     assert 0 < boundaries < 256
