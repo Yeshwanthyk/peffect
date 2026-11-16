@@ -78,7 +78,16 @@ from peffect.managed_runtime import ManagedRuntime
 from peffect.option import Option, Some
 from peffect.resources import acquire_release, acquire_use_release, add_finalizer
 from peffect.scheduler import MaxOpsBeforeYield, PreventSchedulerYield, Scheduler
-from peffect.scope import Closeable, Scope, ScopeService, fork_in, run_in, scope, scoped
+from peffect.scope import (
+    Closeable,
+    Scope,
+    ScopeService,
+    fork_in,
+    fork_scoped,
+    run_in,
+    scope,
+    scoped,
+)
 from peffect.semaphore import Semaphore
 from peffect.timeout import TimeoutError, timeout, timeout_option, timeout_or_else
 
@@ -149,6 +158,7 @@ __all__ = [
     "fork_daemon",
     "fork_in",
     "fork_in_owner",
+    "fork_scoped",
     "from_async",
     "gen",
     "interrupt_all",

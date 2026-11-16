@@ -28,6 +28,7 @@ from peffect import (
     for_each,
     fork,
     fork_daemon,
+    fork_scoped,
     gen,
     provide,
     provide_layer,
@@ -42,8 +43,11 @@ from peffect import (
     timeout_option,
     timeout_or_else,
 )
+from peffect.clock import current_time_millis
+from peffect.logger import log_with_level
 from peffect.option import Option, Some
 from peffect.scheduler import MaxOpsBeforeYield, MixedScheduler, SchedulerService, with_dispatcher
+from peffect.testing import TestClock, TestClockService
 
 
 class NotFound(Exception): ...
@@ -597,3 +601,23 @@ async def race_and_timeout_mistakes() -> None:
     )
     # 113. TIMEOUT_OR_ELSE_EAGER: or_else is a thunk, not an effect
     timeout_or_else(race_left(), duration=10, or_else=race_right())
+
+
+def scoped_fork_and_test_clock_mistakes() -> None:
+    # 114. FORK_SCOPED_SCOPE_DROPPED: fork_scoped needs the Scope that will interrupt the fiber
+    _unscoped: Effect[Fiber[int, RaceErrA], Never, RaceA] = fork_scoped(race_left())
+    # 115. TEST_CLOCK_MAKE_SCOPE_DROPPED: make registers a finalizer, so it needs a Scope
+    _clock: Effect[TestClockService, Never, Never] = TestClock.make()
+    # 116. LOG_LEVEL_UNKNOWN: levels are the upstream names, "Warn" not "Warning"
+    log_with_level("Warning")
+    # 117. TEST_CLOCK_WITH_LIVE_ERROR_LOST: with_live keeps the wrapped effect's error
+    _live: Effect[int, Never, RaceA] = TestClock.with_live(race_left())
+    # 118. CLOCK_MILLIS_NOT_INT: current_time_millis is a float; a TestClock stands between millis
+    _millis: Effect[int, Never, Never] = current_time_millis
+
+
+def emission_rejects_filter_sentinels() -> None:
+    # 119. LOG_ALL_NOT_SEVERITY: All is a minimum filter, not an emitted severity
+    log_with_level("All")
+    # 120. LOG_NONE_NOT_SEVERITY: None is a minimum filter, not an emitted severity
+    log_with_level("None")

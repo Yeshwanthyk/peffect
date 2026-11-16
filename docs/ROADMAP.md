@@ -45,7 +45,7 @@ increment, not a claim that the full runtime or its fidelity gaps are complete.
 | 0 ✓ | kernel: Effect, Exit, Cause, Fiber, fork, masks, gen | internal/core.ts, effect.ts | `core`, `fiber`, `cause` | — | K1–K10 props + `verify-formal-kernel` |
 | 1 ✓ | verify skill + agent guide skeleton, boundary lint | — | `.claude/skills/verify-peffect/`, `AGENTS.md`, `scripts/check_boundaries.py` | — | the skill drives `examples/quickstart.py` end to end; boundary probes red/green |
 | 2 (impl) | Context, Tag, Reference, `provide` | Context.ts (1,397), References.ts | `context.py` | kernel `update_context` (swap + `RestoreContext` frame in one step) | R-typing typetests: a missing service is a type error; C1–C8 tests |
-| 2 | Clock as a Reference, TestClock | Clock.ts (333) | `clock.py`, `testing.py` | Reference + `Async` | `sleep` under TestClock never touches the loop timer |
+| 2 ✓ | Clock as a Reference, TestClock | Clock.ts (333), testing/TestClock.ts | `clock.py`, `testing/` | Reference + `Async` | `sleep` under TestClock never touches the loop timer |
 | 2 | Scope | Scope.ts (573) | `scope.py` | finalizers run masked, reverse order, get the Exit | prop: every added finalizer runs once, in reverse |
 | 3 | Deferred, Latch | Deferred.ts (946), Latch.ts (394) | `deferred.py` | waiter list + `Async` | formal: waiter-list model (no lost wakeup, interrupted waiter leaves the list) |
 | 3 | Ref, SynchronizedRef | Ref.ts (765) | `ref.py` | plain cell; Sync | — |
@@ -154,6 +154,16 @@ an AGENTS.md section with the idiom and the mistakes it prevents.
   - Formally modeled, bounded: synchronous wake and interrupt, nested drives, the queued yield
     token (`verify-formal-kernel`, nesting ≤ 2). Not a proof at arbitrary depth; priorities,
     batches and the op budget are tested only. Wake chains recurse (SC7, measured limit).
+
+- TestClock, Console, Logger, fork_scoped (2026-11-15): implemented against red ccef1bb; awaiting
+  independent review. No kernel module changed.
+  - `console.py` (Console Reference, five methods), `logger.py` (header-only default logger,
+    `CurrentLoggers`, `MinimumLogLevel`, `LogToStderr`, `log_with_level`, `log_warning`),
+    `testing/` (`TestConsole`, `TestClock` with the tracking scheduler and live-console warnings),
+    `scope.fork_scoped`. `current_time_millis` is now a float.
+  - All 25 TestClock.test.ts cases, S1–S14, forkScoped :3083-:3116, and the console/logger
+    source cases pass; typetests should_fail 114–118. Rows TC1–TC6, CO1, LG1, FS1; lesson 06.
+  - Not formally modeled. Logger spans, annotations and the pretty/JSON loggers are not ported.
 
 ## Order and why
 

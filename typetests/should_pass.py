@@ -5,6 +5,8 @@ from typing import Any, Literal, Never, assert_type
 
 from pydantic import ValidationError
 
+import peffect.console as Console
+import peffect.logger as EffectLogger
 from examples.parity import python_app as parity
 from examples.parity import python_composed as composed
 from peffect import (
@@ -41,6 +43,7 @@ from peffect import (
     for_each,
     fork,
     fork_daemon,
+    fork_scoped,
     gen,
     interrupt_all,
     never,
@@ -74,6 +77,7 @@ from peffect.scheduler import (
     SchedulerService,
     with_dispatcher,
 )
+from peffect.testing import TestClock, TestClockService, TestConsole
 
 
 class NotFound(Exception): ...
@@ -210,7 +214,7 @@ def subtracts[R](eff: Effect[int, Never, Users | R]) -> Effect[int, Never, R]:
 assert_type(Clock().use(), Effect[ClockService, Never, Never])
 assert_type(clock_with(lambda _: find(1)), Effect[str, NotFound, Never])
 assert_type(clock_with(lambda _: needs_two()), Effect[Pair, Never, Users | Log])
-assert_type(current_time_millis, Effect[int, Never, Never])
+assert_type(current_time_millis, Effect[float, Never, Never])  # a TestClock can stand at 0.0015
 assert_type(sleep(500), Effect[None, Never, Never])  # a bare number is milliseconds
 assert_type(sleep("1 second"), Effect[None, Never, Never])
 assert_type(sleep(seconds(1)), Effect[None, Never, Never])
@@ -661,3 +665,33 @@ def timeout_types() -> None:
         timeout_or_else(race_pure(), duration=10, or_else=lambda: succeed(1)),
         Effect[bytes | int, Never, Never],
     )
+
+
+def scoped_fork_types() -> None:
+    # fork_scoped adds Scope to R; scoped discharges it
+    assert_type(fork_scoped(race_left()), Effect[Fiber[int, RaceErrA], Never, RaceA | Scope])
+    assert_type(scoped(fork_scoped(race_pure())), Effect[Fiber[bytes, Never], Never, Never])
+
+
+def console_logger_types() -> None:
+    # Console and the logger References never add to R
+    assert_type(Console.log("a", 1), Effect[None, Never, Never])
+    assert_type(Console.Console().use(), Effect[Console.ConsoleService, Never, Never])
+    assert_type(EffectLogger.log_warning("a", 1), Effect[None, Never, Never])
+    assert_type(EffectLogger.log_with_level("Debug")("a"), Effect[None, Never, Never])
+    assert_type(
+        EffectLogger.CurrentLoggers().use(), Effect[tuple[EffectLogger.Logger, ...], Never, Never]
+    )
+    assert_type(TestConsole.log_lines, Effect[tuple[object, ...], Never, Never])
+    assert_type(TestConsole.test_console_with(lambda _: race_left()), Effect[int, RaceErrA, RaceA])
+
+
+def testclock_module_types() -> None:
+    # make needs the Scope its warning is stopped by; the layer provides Clock and Scheduler
+    assert_type(TestClock.make(), Effect[TestClockService, Never, Scope])
+    assert_type(TestClock.layer(warning_delay="10 millis"), Layer[Clock | Scheduler])
+    assert_type(provide_layer(TestClock.layer())(sleep(1)), Effect[None, Never, Never])
+    assert_type(TestClock.adjust("1 second"), Effect[None, Never, Never])
+    assert_type(TestClock.set_time(1.5), Effect[None, Never, Never])
+    assert_type(TestClock.with_live(race_left()), Effect[int, RaceErrA, RaceA])
+    assert_type(TestClock.test_clock_with(lambda _: race_left()), Effect[int, RaceErrA, RaceA])

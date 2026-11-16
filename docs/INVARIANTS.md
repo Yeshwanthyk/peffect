@@ -430,6 +430,29 @@ raises (including yielding from `finally`), the original cause and cleanup defec
 with defect election, preserving interruption. This is a Python adaptation, not JavaScript
 generator parity. Use effect finalizers for effectful cleanup. `test_gen_cleanup.py` pins it.
 
+## TestClock, Console, Logger, fork_scoped
+
+`src/peffect/testing/_clock.py`, `testing/_console.py`, `console.py`, `logger.py` and
+`scope.fork_scoped`, all over public primitives: no kernel module changed. Upstream:
+`testing/TestClock.ts`, `testing/TestConsole.ts`, `Console.ts`, `internal/effect.ts:6584-6634,
+:6725-6760, :6810-6813, :6984-7003`.
+
+| # | Invariant | Enforced by | Pinned by |
+|---|---|---|---|
+| TC1 | **Finite deadlines wake when reached; a NaN target drains pending sleeps, matching upstream.** `sleep` inserts before equal deadlines in a descending list and waits on its own latch; an interrupted sleep removes its entry, so a later `adjust` skips it. | `_TestClock.sleep` (acquire_use_release) | `test_sleep_delays_effects_until_time_is_adjusted`, `test_source_s2_equal_deadlines_wake_in_sleep_order`, `test_adjust_skips_the_cancelled_deadline_*` |
+| TC2 | **`adjust` waits for woken work to settle, bounded by the busy-warning timeout.** Under one run semaphore, after a fork-and-await barrier, each due sleep advances the clock to its deadline and opens its latch with tracking on; `adjust` then waits until every task the wake scheduled has run or the busy-warning timeout expires (or, on a clock without its Scheduler, yields once). | `_run_body`, `_wake`, `_TrackingDispatcher` | `test_adjust_waits_for_woken_fibers_*`, `test_adjust_runs_sleeps_registered_after_a_yield`, `test_source_s3_*` |
+| TC3 | **Tracking is restored and counted even when a tracked task raises.** `run_tracked` and the dispatcher's decrement are `try/finally`. | `_State.run_tracked`, `_TrackingDispatcher` | `test_source_s12_a_raising_tracked_task_still_settles_the_wake_and_restores_tracking` |
+| TC4 | **Exact time arithmetic.** Wall nanos floor the fraction (`millisToNanos`), monotonic adds `Math.round` (half up) and never goes back; non-finite steps leave nanos alone; `adjust` keeps the exact nanos of a Duration. | `_millis_to_nanos`, `_js_round`, `_State.advance_to` | `test_source_s5_*`, `test_source_s1_*`, `test_source_s6_*`, `test_source_s7_*`, `test_adjust_preserves_precision_*` |
+| TC5 | **One warning per clock, on the live clock and console, owned by the first sleeper.** The warning fiber is a child of the first sleeping fiber (interruptible), stopped by `adjust`/`set_time` and by the `make` scope's finalizer. The busy warning is a `timeout_or_else` on the live clock. | `_warning_start`, `warning_done`, `_make_with_scheduler` | `test_warnings_bypass_test_console`, `test_source_s4_*`, `test_source_s10_*`, `test_source_s11_*`, `test_source_s13_*`, `test_source_s14_*` |
+| TC6 | **A copy shares the clock.** `copy.copy` copies the one-slot wrapper; the state object is shared, as upstream's object spread shares its closures. | `_TestClock.__slots__ = ("_s",)` | `test_adjust_advances_the_clock_when_detached_or_copied` |
+| CO1 | **Console is a Reference with the upstream key.** Using it never adds to R; the live console prints log/info/debug to stdout, warn/error to stderr. TestConsole records every call, flattened per method; each layer build is fresh. | `console.Console`, `_TestConsole` | `test_reference_keys_match_upstream`, `test_live_console_routes_*`, `test_test_console_*`, `test_each_test_console_layer_build_starts_empty` |
+| LG1 | **A line goes to each distinct logger once, first registration first, unless below the minimum.** Emitted levels use the six-value Severity domain; All/None are filters only. With no loggers, time is not read. Otherwise the time is the fiber Clock's, read once per line; the header is `[HH:MM:SS.mmm] LEVEL (#fiber):` in local time, written to the fiber's Console (`error` when LogToStderr). | `log_with_level`, `_default_log` | `test_a_logger_registered_twice_logs_once_*`, `test_minimum_log_level_filters`, `test_default_logger_header_matches_upstream`, `test_log_to_stderr_*` |
+| FS1 | **`fork_scoped` forks into the ambient Scope.** The fiber outlives its parent and is interrupted when the scope closes; a closed scope runs nothing. | `scope.fork_scoped` = `scope.flat_map(fork_in)` | `tests/test_fork_scoped_upstream.py`; typetests should_fail 114 |
+
+**Not proven.** None of this is in the formal kernel model. Ordering claims rest on the tests
+above and the production mutation run; warning-window tests count what was printed in a bounded
+live window, not that nothing prints later.
+
 ## Kernel boundary
 
 Only the kernel (`src/peffect/core.py`, `fiber.py`, `cause.py`, `__init__.py`) knows about fibers

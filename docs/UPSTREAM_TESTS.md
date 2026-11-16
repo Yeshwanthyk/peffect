@@ -99,7 +99,7 @@ pinned in `test_clock_duration_upstream.py`.
 |---|---|---|---|---|
 | prerequisites | `tests/test_fiber_start_upstream.py` | `Effect.test.ts` :2987 :3013 :3160 :3169, `Fiber.test.ts` :137 :225; source-derived cases (labelled) for forkUnsafe :5614-5637, forkDetach :5728, exit :3873-3889, exitFailCause core.ts:611-624 | — | green: `fork`/`fork_daemon(start_immediately=)`, `exit_` |
 | lifecycle | `tests/test_fiber_lifecycle_upstream.py` | `Fiber.test.ts` :10 :22, `Effect.test.ts` forkIn :3039 (×2) :3057 :3073; source-derived cases (labelled) for runForkWith :5773-5799, fiberRunIn :5801-5822, forkIn :5717-5737, forkUnsafe mask :5622, fiberScopeFinalizer :5690-5693, scopeCloseFinalizers skip :4090-4093, scopeRemoveFinalizerUnsafe :4159-4172, FiberImpl parent clearing :652-655 | E | green (26): `run_fork`, `run_fork_with`, `run_in`, `fork_in`, `Scope.remove_finalizer_unsafe`, `Fiber.parent` |
-| D: TestClock | `tests/test_testclock.py` | `TestClock.test.ts` sleep, setTime and adjust groups | C, prerequisites | drafted; red only on missing `peffect.testing` (16) |
+| D: TestClock | `tests/test_testclock.py` | all 25 `TestClock.test.ts` cases (warnings, sleep, setTime, adjust, layer) plus source-derived S1–S14 | C, prerequisites, Scheduler, Console | green; see the TestClock section below |
 | E: Scope, sequential | `tests/test_scope.py` | `Scope.test.ts` sequential variants: interrupted close, direct close after interrupt, masked `closeUnsafe`, throw-then-continue, sole throwing finalizer keeps the failure, the 4 fork tests | A, B, prerequisites | green (20, with the Scope.ts doc examples and source-derived cases). `Scope.use` (scopeUse) not ported, deferred to F |
 | F: remaining Scope effects | `tests/test_scope_effects.py` | `Effect.test.ts` scoped `:86`, forkIn `:3038-3071` (ported in lifecycle), forkScoped `:3083-3116`, updateServiceScoped `:5334` `:5345` `:5359` | E | planned |
 | G: parallel Scope | `tests/test_scope_parallel.py` | `Scope.test.ts` parallel variants (4), `Effect.test.ts:3073`, TestClock "handles multiple sleeps" (needs `forkScoped`) | D, E, F | `Scope.test.ts` :7 (harness adaptation: Deferred gates for TestClock), :22, :39, :124 green; independently verified by Sol 6.1. `Effect.test.ts:3073` green in the lifecycle file with the closing-fiber skip (`key !== parent`, `internal/effect.ts:4090-4093`); "handles multiple sleeps" waits on D and `forkScoped` |
@@ -110,7 +110,7 @@ Decisions already made for these batches:
 - **`copy.copy`.** TestClock's "detached, copied or inherited" case uses JS object spread. Before using `copy.copy` in its place, check that it gives the same observable result the test asserts; don't assume the two are equivalent.
 
 Deferred elsewhere in these upstream files:
-- TestClock warning tests: they need TestConsole.
+- TestClock warning tests: now ported with TestConsole (TestClock section below).
 - The timeout variant of the cancelled-deadline test: tier 3.
 - Layer tests: see the Layer section below.
 - `MaxOpsBeforeYield`: the scheduler is now ported (Scheduler section below). These Clock-era
@@ -384,3 +384,50 @@ review found application-level eager capacity checking and custom-resource wirin
 languages. Execution-time append checks and a single chosen Ledger identity correct them; saved
 and preconstructed append regressions plus custom-capacity sharing exercise those contracts.
 This is application evidence, not exhaustive concurrency evidence or a formal library proof.
+
+## TestClock, Console, Logger, fork_scoped — `tests/test_testclock.py`, `tests/test_console_logger.py`, `tests/test_fork_scoped_upstream.py`
+
+`TestClock.test.ts`: all 25 cases, each docstring naming its line and title. The two warning
+cases poll both the live output and TestConsole and stop at either, so a regression fails on the
+assertion instead of a timeout. `Effect.test.ts` forkScoped :3083-:3116: both cases, plus one
+source-derived case (the fiber outlives its forking fiber until the scope closes).
+
+Source-derived TestClock cases. Values were measured against the pinned source under bun where the case states one:
+
+| case | reads | pins |
+|---|---|---|
+| S1 negative adjust moves wall time back, not monotonic | run's `if (adj > 0)` | −1 s: nanos `(-1e9, 0)`; then +2 s: `(1e9, 2e9)` |
+| S2 equal deadlines wake in sleep order | sleep's binary insert | `a, b, c` |
+| S3 a clock without its Scheduler yields once per wake | wake, `pending == 0` | a woken fiber that yields once finishes before `adjust` returns |
+| S4 closing the `make` scope stops the pending warning | make's `addFinalizer(warningDone)` | 0 warnings in a 150 ms window |
+| S5 monotonic rounds half up, wall floors | advanceTo, millisToNanos | `(2.5e-6 → 2, 3)`, `(5e-7 → 0, 1)`, `(7e-7 → 0, 1)`, `(1.5 → 1.5e6, 1.5e6)` |
+| S6 non-finite times | advanceTo, run | nanos stay 0; a sleep past +∞ returns |
+| S7 sub-millisecond adjust keeps exact nanos | adjust's exact-nanos step | `D.nanos(1500)`: 0.0015 ms, nanos `(1500, 1500)` |
+| S8 `test_clock_with` on the live clock | testClockWith | TypeError defect (upstream casts) |
+| S9 each run gets a fresh clock | layer | two runs each read 1000 after `adjust(1s)` |
+| S10 one warning per clock | warningStart from Start only | 1 warning for two sleeps |
+| S11 the warning belongs to the first sleeper | warningStart `forkChild` | interrupting the sleeper: 0 warnings |
+| S12 a raising tracked task still settles the wake | TrackingScheduler `try/finally` | `adjust` completes; later tasks reach the parent unwrapped |
+| S13 the warning fiber is interruptible under a masked sleeper | `forkChild` default | `adjust` returns at once, 0 warnings |
+| S14 `set_time` stops the warning while the sleeper still waits | setTime's `warningDone` | 0 warnings |
+
+S12 is white-box through public seams: a recording `MixedScheduler` and the loop's exception
+handler; nothing in production is faked.
+
+`test_console_logger.py` (source-derived from Console.ts, TestConsole.ts and
+`internal/effect.ts`): reference keys, live routing, TestConsole capture and fresh builds, the
+default header, LogToStderr, minimum levels, Set-like logger dedup, no loggers, the default
+logger list.
+
+Corrections to the red tests, type-only: `LEVELS` and `MINIMUM_CASES` are annotated with
+`LogLevel`, and `local_timezone` returns `Generator` (pyright flags `Iterator` on a
+`@contextmanager`). No assertion changed. S12, S13, S14 and the `7e-7` S5 case were added during
+implementation; the last three kill mutants that survived the first production run.
+
+Adaptations: `repr` stands in for `toJSON`; `liveClocks`' WeakMap is an `isinstance` unwrap;
+the logger is header-only (no spans, annotations or cause rendering); Console has five methods;
+`LogOptions` carries the fiber id and the fiber's context, not the fiber (B3).
+
+TestClock review regressions: `test_nan_set_time_wakes_pending_sleep` preserves the upstream
+`>` break condition for unordered NaN targets; `test_no_loggers_does_not_read_clock` pins the
+empty-logger fast path. Negative typetests 119–120 reject filter sentinels as emitted severities.
