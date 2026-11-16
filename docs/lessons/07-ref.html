@@ -1,0 +1,16 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+body{font-family:var(--font-sans,system-ui);color:var(--foreground);margin:0;line-height:1.5}h2{font-size:20px}p,li{font-size:14px}pre{padding:16px;background:var(--code-background);overflow:auto;border-radius:var(--radius)}table{width:100%;border-collapse:collapse}td,th{padding:10px;border-bottom:1px solid var(--border);text-align:left}
+</style></head><body><h2>Mutable state: Ref and SynchronizedRef</h2>
+<p>A Ref computes and stores a replacement in one synchronous effect step. Use SynchronizedRef when computing the replacement itself runs an effect.</p>
+<pre>count = yield from Ref[int].make(0)
+yield from count.update(lambda n: n + 1)
+
+state = yield from SynchronizedRef[int].make(0)
+value = yield from state.update_and_get_effect(
+    lambda n: succeed(n + 1)
+)</pre>
+<table><tr><th>Operation</th><th>Behavior</th></tr><tr><td>Ref.update</td><td>Read → compute → assign in one step.</td></tr><tr><td>SynchronizedRef.update_effect</td><td>Acquire permit → read → run callback effect → assign on success → release.</td></tr><tr><td>SynchronizedRef.get</td><td>Unlocked. During a parked update it reads the previous value.</td></tr></table>
+<p>A failure before assignment leaves the slot unchanged. An interrupt may arrive after assignment: an interrupted exit does not guarantee rollback. Mutating the referenced object inside a callback is not rolled back either; use immutable replacement values when that matters.</p>
+<p>The permit is not reentrant. Running another synchronized write on the same reference inside its update waits behind itself. Some(None) is a present replacement, not an absent update.</p>
+<p>Specify the type parameter on make/make_unsafe. Both classes are invariant because they accept and return values. Python set returns None; the pinned vendor declares void but incidentally returns its backing MutableRef.</p>
+<p>Evidence: upstream test ports, source-derived interruption sweeps and two generated models. The model checker for the kernel does not prove these cell contracts. No cross-thread safety is claimed.</p></body></html>

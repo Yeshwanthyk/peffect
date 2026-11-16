@@ -16,6 +16,7 @@ from peffect import (
     Closeable,
     Context,
     Deferred,
+    Done,
     Effect,
     Exit,
     Failure,
@@ -23,6 +24,7 @@ from peffect import (
     Layer,
     ManagedRuntime,
     MemoMap,
+    Queue,
     Reference,
     Scope,
     ScopeService,
@@ -68,6 +70,7 @@ from peffect import (
 from peffect import scope as current_scope  # Effect.scope
 from peffect.duration import Duration, seconds
 from peffect.option import Option, Some
+from peffect.queue import Dequeue, Enqueue, is_dequeue, is_enqueue, is_queue
 from peffect.scheduler import (
     MaxOpsBeforeYield,
     MixedScheduler,
@@ -695,3 +698,161 @@ def testclock_module_types() -> None:
     assert_type(TestClock.set_time(1.5), Effect[None, Never, Never])
     assert_type(TestClock.with_live(race_left()), Effect[int, RaceErrA, RaceA])
     assert_type(TestClock.test_clock_with(lambda _: race_left()), Effect[int, RaceErrA, RaceA])
+
+
+def ref_type_contracts() -> None:
+    from peffect import Ref, SynchronizedRef
+    from peffect.option import Option, Some
+
+    ref = Ref[int | None].make_unsafe(1)
+    assert_type(ref, Ref[int | None])
+    assert_type(Ref[int | None].make(None), Effect[Ref[int | None], Never, Never])
+    ref.set(None)
+    ref.update_some(lambda _: Some(None))
+    sref = SynchronizedRef[int | None].make_unsafe(None)
+    assert_type(sref, SynchronizedRef[int | None])
+    assert_type(
+        SynchronizedRef[int | None].make(1), Effect[SynchronizedRef[int | None], Never, Never]
+    )
+
+    # Declared error and environment channels must survive each effectful method.
+    def checked(
+        eff: Effect[int, str, Users],
+        opt: Effect[Option[int], str, Users],
+        pair: Effect[tuple[str, int], str, Users],
+        partial: Effect[tuple[str, Option[int]], str, Users],
+    ) -> None:
+        r = SynchronizedRef[int].make_unsafe(1)
+        assert_type(r.get_and_update_effect(lambda _: eff), Effect[int, str, Users])
+        assert_type(r.get_and_update_some_effect(lambda _: opt), Effect[int, str, Users])
+        assert_type(r.modify_effect(lambda _: pair), Effect[str, str, Users])
+        assert_type(r.modify_some_effect(lambda _: partial), Effect[str, str, Users])
+        assert_type(r.update_effect(lambda _: eff), Effect[None, str, Users])
+        assert_type(r.update_and_get_effect(lambda _: eff), Effect[int, str, Users])
+        assert_type(r.update_some_effect(lambda _: opt), Effect[None, str, Users])
+        assert_type(r.update_some_and_get_effect(lambda _: opt), Effect[int, str, Users])
+
+    assert callable(checked)
+
+
+def queue_prerequisite_type_contracts() -> None:
+    from peffect import Done, done, suspend_exit
+    from peffect.pull import catch_done, done_exit_from_cause, filter_done
+
+    assert_type(Done(), Done[None])
+    assert_type(Done("leftover"), Done[str])
+    assert_type(done(), Effect[Never, Done[None], Never])
+    assert_type(done("leftover"), Effect[Never, Done[str], Never])
+
+    def checked(
+        pure_done: Effect[int, Done[str], RaceA],
+        mixed: Effect[int, NotFound | Done[str], RaceA],
+        ordinary: Effect[int, NotFound, RaceA],
+        success: Effect[int, Never, RaceA],
+        cause: Cause[NotFound | Done[str]],
+    ) -> None:
+        def recover(leftover: str) -> Effect[float, Timeout, Users]:
+            return fail(Timeout(leftover))
+
+        assert_type(suspend_exit(lambda: mixed), Effect[int, NotFound | Done[str], RaceA])
+        assert_type(catch_done(pure_done, recover), Effect[int | float, Timeout, RaceA | Users])
+        assert_type(
+            catch_done(mixed, recover), Effect[int | float, NotFound | Timeout, RaceA | Users]
+        )
+        assert_type(
+            catch_done(ordinary, recover), Effect[int | float, NotFound | Timeout, RaceA | Users]
+        )
+        assert_type(catch_done(success, recover), Effect[int | float, Timeout, RaceA | Users])
+        assert_type(filter_done(cause), Exit[Done[str], NotFound])
+        assert_type(done_exit_from_cause(cause), Exit[str, NotFound])
+        assert_type(done_exit_from_cause(Cause.fail(Done("left"))), Exit[str, Never])
+
+    assert callable(checked)
+
+
+# Queue: capability variance and completion/error/environment channels.
+
+
+class QueueTypeService(Tag[int], key="queue/type-service"):
+    pass
+
+
+def queue_enqueue_contravariance(wide: Enqueue[object, object]) -> Enqueue[int, str]:
+    return wide
+
+
+def queue_dequeue_covariance(narrow: Dequeue[int, str]) -> Dequeue[object, object]:
+    return narrow
+
+
+def queue_channels(q: Queue[int, Done | str], ordinary: Queue[int, str], pure: Queue[int, Done]):
+    assert_type(q.take(), Effect[int, Done | str, Never])
+    assert_type(q.peek(), Effect[int, Done | str, Never])
+    assert_type(q.take_all(), Effect[list[int], Done | str, Never])
+    assert_type(q.take_n(2), Effect[list[int], Done | str, Never])
+    assert_type(q.take_between(1, 3), Effect[list[int], Done | str, Never])
+    assert_type(q.take_unsafe(), Exit[int, Done | str] | None)
+    assert_type(q.poll(), Effect[Some[int] | None, Never, Never])
+    assert_type(q.clear(), Effect[list[int], str, Never])
+    assert_type(q.collect(), Effect[list[int], str, Never])
+    assert_type(q.await_(), Effect[None, str, Never])
+    assert_type(pure.clear(), Effect[list[int], Never, Never])
+    assert_type(pure.collect(), Effect[list[int], Never, Never])
+    assert_type(pure.await_(), Effect[None, Never, Never])
+    assert_type(ordinary.clear(), Effect[list[int], str, Never])
+    assert_type(ordinary.collect(), Effect[list[int], str, Never])
+    assert_type(ordinary.await_(), Effect[None, str, Never])
+    assert_type(q.offer(1), Effect[bool, Never, Never])
+    assert_type(q.offer_all([1]), Effect[list[int], Never, Never])
+    assert_type(q.end(), Effect[bool, Never, Never])
+    assert_type(q.as_enqueue(), Enqueue[int, Done | str])
+    assert_type(q.as_dequeue(), Dequeue[int, Done | str])
+    assert_type(Queue[int, Done].bounded(1), Effect[Queue[int, Done], Never, Never])
+    q.fail_cause(Cause.fail("error"))
+
+
+def queue_producer_channels(
+    q: Queue[int, Done | str], producer: Effect[object, str, QueueTypeService]
+):
+    assert_type(q.into(producer), Effect[bool, Never, QueueTypeService])
+
+
+def queue_bottom(q: Queue[Never, Never]):
+    assert_type(q.take(), Effect[Never, Never, Never])
+    assert_type(q.clear(), Effect[list[Never], Never, Never])
+    assert_type(q.await_(), Effect[None, Never, Never])
+
+
+def queue_guards(value: object):
+    if is_queue(value):
+        assert_type(value, Queue[object, object])
+
+
+def queue_enqueue_guard(value: object):
+    if is_enqueue(value):
+        assert_type(value, Enqueue[object, object])
+
+
+def queue_dequeue_guard(value: object):
+    if is_dequeue(value):
+        assert_type(value, Dequeue[object, object])
+
+
+def queue_each_variance_axis(
+    ea: Enqueue[object, str],
+    ee: Enqueue[int, object],
+    da: Dequeue[int, str],
+    de: Dequeue[int, str],
+) -> tuple[Enqueue[int, str], Enqueue[int, str], Dequeue[object, str], Dequeue[int, object]]:
+    return ea, ee, da, de
+
+
+def queue_payload_completion(q: Queue[int, Done[str | int] | str]):
+    assert_type(q.clear(), Effect[list[int], str, Never])
+    assert_type(q.collect(), Effect[list[int], str, Never])
+    assert_type(q.await_(), Effect[None, str, Never])
+
+
+def queue_batch_input_type(writer: Enqueue[object, str]):
+    assert_type(writer.offer_all([1, 2]), Effect[list[object], Never, Never])
+    assert_type(writer.offer_all_unsafe([1, 2]), list[object])

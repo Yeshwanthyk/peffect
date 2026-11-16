@@ -431,3 +431,80 @@ the logger is header-only (no spans, annotations or cause rendering); Console ha
 TestClock review regressions: `test_nan_set_time_wakes_pending_sleep` preserves the upstream
 `>` break condition for unordered NaN targets; `test_no_loggers_does_not_read_clock` pins the
 empty-logger fast path. Negative typetests 119–120 reject filter sentinels as emitted severities.
+
+## Ref and SynchronizedRef
+
+All 15 Ref.test.ts and eight SynchronizedRef.test.ts cases are ported in the two named test
+files. The creator-interruption case replaces unported Deferred.complete with explicit
+creation and publication. Derived cases pin laziness, Some(None), unlocked reads, queued
+writes, callback failures, operation-level interruption and non-reentrancy. test_ref_props.py
+checks sequential results and serialized concurrent updates against source-derived models.
+
+The concurrent property disables automatic yields; separate operation-budget sweeps cover
+interruptions after callback production and after assignment. Hypothesis discarded draws
+were engine size overruns, not application assumptions. Author mutation checks killed ten
+mutants; two truthiness replacements are equivalent for Some (always truthy). Three
+property-only mutants also fail. Independent review passed; parent integration verification follows.
+
+Methods replace dual call forms. Pipeable, Inspectable and JSON inspection are not ported.
+
+Ref adaptation: `set` returns Python None, following the declared void contract. The pinned
+vendor implementation returns its backing MutableRef at runtime despite declaring void;
+that incidental return value is not reproduced (also applies to SynchronizedRef.set).
+
+## Queue prerequisites: atomic delivery and Pull completion
+
+`tests/test_suspend_exit.py` derives `suspend_exit` from Queue.ts:2042-2049 and the
+interruption sweep in Queue.test.ts:517-555. Its ordinary-sync control reaches the unsafe
+removal/delivery boundary; terminal success/failure and a reentrant interruption pin the
+atomic handoff. Returned nonterminal effects delegate normally, thunks stay lazy/reusable,
+and raising thunks become defects. The 16-index sweep checks conservation at reached
+operation boundaries; it does not claim all 16 indices are reached or model full Queue.
+
+`tests/test_pull_upstream.py` ports all six Pull.test.ts cases: :7 pure Done, :12 merged
+defect, :18 no Done, :23 Done plus interruption, :31 leftover-to-Exit, :36 stripped failure.
+Source-derived additions pin Pull.ts:165-177, :195-215, :238-256, :324-329, :354-357 and
+internal/core.ts:739-767: typed failures and defects merged with Done, preservation of
+interrupt reasons, first Done including None, public constructors/guards, handler failures
+and defects, and interruption of a waiting fiber. The committed reentrant test's startup
+hook was replaced by WithFiber before implementation acceptance; assertions are unchanged.
+The mixed None/string cause spells its first constructor `Done[None](None)` so contextual
+generic inference cannot assign that payload the later string's type; assertions are unchanged.
+
+Adaptations: None is the void leftover; nominal `is_done` replaces the JS brand guard.
+`filter_done` returns Exit[Done[L], E] as data instead of the unported Result type.
+`done_exit_from_cause` returns Exit[L, E]. `catch_done` is data-first. Positive type fixtures
+pin Done exclusion and leftover types; negative blocks 127-133 pin retained channels.
+Remaining Pull operators, type utility spellings and Stream integration remain deferred.
+
+## Queue — complete operational surface (implementation, review pending)
+
+`tests/test_queue_upstream.py` ports Queue.test.ts:18–990; `test_queue_interleavings.py`
+replaces guessed yield padding with observed-operation injection and manual dispatcher
+settling. `test_queue_props.py` supplies three independent per-ID ownership ledgers;
+`test_queue_worker.py` runs the composed example as a subprocess. Complete export inventory,
+per-test source anchors and adaptations: [QUEUE_SOURCE_MAP.md](QUEUE_SOURCE_MAP.md).
+
+All 39 value operations and three model types are present, in repository method style.
+Only state metadata and Pipeable/Inspectable/JSON spellings are excluded. Stream.fromQueue
+scenarios assert their Queue drain/terminal contract directly; Stream integration remains
+in its module. Source-derived additions cover into, raw capacity quirks, forced interruption
+inside producer resumption, callback defects and live waiter insertion during iteration.
+
+Corrections to committed red tests preserve their behavioral assertions: unsafe Exits are
+checked by value/cause because Python Exit equality is identity; the offerAll registration
+baseline is captured before shutdown cleanup so it measures only registration operations.
+A mutation survivor exposed sparse generation of an uncancelled zero-capacity pending batch;
+`capacity=0; batch(3)` is now an explicit property example, with the original assertions intact.
+
+Normal generated capacities are 0, 1, 2 and infinity. Raw fractional/NaN/negative compatibility
+is characterized separately. Negative-capacity take can retry indefinitely upstream and is
+not started. Pyright exclusion uses canonical payload unions `Done[X | Y]`; separately
+instantiated `Done[X] | Done[Y]` may retain a Done member statically despite correct runtime
+filtering. Positive gates and negative blocks 134–154 pin the remaining channel, capability,
+variance and into contracts. No cast, suppression or extra kernel API was added.
+
+Author evidence: 196 real vendor/Python traces, 4824 matching snapshots, controlled operation
+sweeps and isolated package mutations (including property-only green controls). Sensitivity
+artifacts retain the initial survivor before promoting its minimal regression. These checks
+are bounded, and do not constitute a formal proof or independent review acceptance.

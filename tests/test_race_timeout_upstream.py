@@ -30,7 +30,7 @@ What upstream does, and these tests pin:
 Adaptations used throughout:
 - Data-first only: `race(a, b)`, `timeout(eff, d)`, `timeout_or_else(eff, duration=, or_else=)`;
   upstream's pipeable (data-last) forms are not ported.
-- TestClock isn't built. Where upstream uses it, the program gets a provided `GateClock`: a real
+- The original ports use a provided `GateClock` for explicit sleep gates: a real
   ClockService whose `sleep` records the Duration it was given and parks on a Deferred the test
   opens; as TestClock.sleep (TestClock.ts:329-332), a sleep of at most 0 ms ends at once.
   `TestClock.adjust(t)` is `clock.fire_until(t)`: open, shortest first, each recorded
@@ -41,7 +41,7 @@ Adaptations used throughout:
   `await_()`; upstream string defects are built as `fail_cause(Cause((Die(...),)))`.
 - Upstream's `toString()` of a TimeoutError is "TimeoutError: <message>"; here the class name
   and `str(error)` are checked. Span and log-annotation observations in :2158 are omitted
-  (no tracer or logger yet).
+  (outside these race/timeout assertions).
 - `asyncio.wait_for` is a hang guard only; gates and fibers set every order.
 """
 
@@ -67,6 +67,7 @@ from peffect import (
     Interrupt,
     MixedScheduler,
     Option,
+    Queue,
     Reference,
     Scheduler,
     SchedulerDispatcher,
@@ -86,12 +87,14 @@ from peffect import (
     on_exit,
     on_interrupt,
     provide,
+    provide_layer,
     race,
     race_all,
     race_all_first,
     race_first,
     run,
     run_fork,
+    scoped,
     sleep,
     succeed,
     suspend,
@@ -106,6 +109,7 @@ from peffect import (
 from peffect.core import WithFiber
 from peffect.duration import Duration
 from peffect.fiber import Task
+from peffect.testing import TestClock
 
 WATCHDOG_SECONDS = 2
 
@@ -390,7 +394,7 @@ class _ListDispatcher:
 async def test_race_interrupts_a_pending_loser_before_the_parent_resumes(
     name: str, combinator: Combinator
 ):
-    """Effect.test.ts:1572. Adaptation: no Queue yet. Upstream's `Queue.offerUnsafe` gives the
+    """Effect.test.ts:1572, retained scheduler-only regression. Upstream's Queue offer gives the
     loser a scheduled wake; here the loser opens on a gate and then waits on a queued step
     (`yield_now`), so it holds a pending task when the race settles. Upstream checks the
     interruptor stack frame; here the interruptor id is the racing fiber's."""
@@ -1078,3 +1082,60 @@ async def test_source_timeouts_keep_typed_channels():
     exits, present = await guarded(clock.provide(program()))
     assert exits == [[("fail", "src-err")]] * 3 + [[("fail", "fb-err")]]
     assert present == Some(None)
+
+
+@pytest.mark.parametrize(("name", "combinator"), BOTH)
+async def test_queue_message_survives_race_loser_interruption(name: str, combinator: Combinator):
+    """Effect.test.ts:1572 with real Queue: interrupt before its scheduled wake consumes."""
+    scheduler = YieldParentOnce()
+    winner = Deferred[str].make_unsafe()
+    accepted: list[str] = []
+    loser_exits: list[Exit[Any, Any]] = []
+
+    @gen
+    def program():
+        queue = yield from Queue[str].unbounded()
+
+        def body(parent: Fiber[Any, Any]) -> Effect[Any, Any, Any]:
+            scheduler.parent = parent
+            loser = queue.take().tap(lambda value: sync(lambda: accepted.append(value)))
+            return combinator(
+                loser.pipe(on_exit(lambda ex: sync(lambda: loser_exits.append(ex)))),
+                winner.await_(),
+            )
+
+        fiber: Fiber[Any, Any] = yield from fork(WithFiber(body), start_immediately=True)
+        assert queue.offer_unsafe("loser")
+        scheduler.yield_parent = True
+        winner.done_unsafe(succeed("winner"))
+        for _ in range(100):
+            if not scheduler.tasks:
+                break
+            scheduler.tasks.pop(0)()
+        assert not scheduler.tasks, "dispatcher did not settle"
+        assert (yield from fiber.join()) == "winner", name
+        assert accepted == []
+        assert [reasons(ex) for ex in loser_exits] == [[("interrupt", fiber.id)]]
+        assert queue.size_unsafe() == 1
+        assert (yield from queue.take()) == "loser"
+        assert queue.size_unsafe() == 0
+
+    await guarded(provide(Scheduler.context(scheduler))(program()))
+
+
+@pytest.mark.parametrize("capacity", [0, 1])
+async def test_timeout_removes_queue_taker_before_next_message(capacity: int):
+    """Real Queue/TestClock composition: timeout cleanup cannot steal the next message."""
+
+    @gen
+    def program():
+        queue = yield from Queue[int].bounded(capacity)
+        timed = yield from fork(timeout_option(queue.take(), 1), start_immediately=True)
+        yield from TestClock.adjust(1)
+        assert (yield from timed.join()) is None
+        offered = yield from fork(queue.offer(7), start_immediately=True)
+        assert (yield from queue.take()) == 7
+        assert (yield from offered.join()) is True
+        assert queue.size_unsafe() == 0
+
+    await guarded(scoped(provide_layer(TestClock.layer())(program())))

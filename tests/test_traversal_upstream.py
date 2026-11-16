@@ -11,7 +11,8 @@ Source-derived, labelled `test_source_*` (no upstream test): ordered results whe
 out of order, a fresh run per execution, and the concurrency floor of 1; added after the
 implementation, because scratch mutations survived the ports: a mapper defect leaves only
 after started workers are interrupted, and workers inherit the caller's mask.
-Not ported: "sequential interrupt", "unbounded interrupt" and "unbounded fail" need TestClock.
+Not ported: "sequential interrupt", "unbounded interrupt" need TestClock.
+"unbounded fail" uses the real TestClock below.
 Semantics: forEach and iterateConcurrentImpl, internal/effect.ts:5030-5072, :5160-5302.
 
 Python names: `Effect.forEach(items, f, { concurrency })` is
@@ -68,13 +69,17 @@ from peffect import (
     gen,
     never,
     on_interrupt,
+    provide_layer,
     run,
     run_exit,
+    sleep,
     succeed,
+    suspend,
     sync,
     uninterruptible,
 )
 from peffect.core import AnyFiber, WithFiber
+from peffect.testing import TestClock
 
 WATCHDOG_SECONDS = 2
 
@@ -506,3 +511,31 @@ async def test_source_traversal_cancellation_combines_interrupt_before_cleanup_d
     assert isinstance(ex.cause.reasons[0], Interrupt)
     assert ex.cause.failures == []
     assert ex.cause.defects == ["typed", "defect"]
+
+
+async def test_unbounded_fail():
+    """Effect.test.ts:891 "unbounded fail": the failing observer stops later sleepers.
+
+    The unbounded pump has exhausted its input before failure; no paused window can refill
+    and accidentally hide a missing observer-driven fail-fast step. TestClock.adjust settles
+    all awakened fibers, so no live sleeps or scheduler yields are needed.
+    """
+    done: list[int] = []
+
+    def item(i: int, _index: int) -> Effect[int, str, Never]:
+        def complete() -> Effect[int, str, Never]:
+            done.append(i)
+            return fail("error") if i == 3 else succeed(i)
+
+        return sleep(i * 100).flat_map(lambda _: suspend(complete))
+
+    @gen
+    def program():
+        fiber = yield from fork(for_each([1, 2, 3, 4, 5], item, concurrency="unbounded"))
+        yield from TestClock.adjust(500)
+        result = yield from fiber.await_()
+        assert isinstance(result, Failure)
+        assert result.cause == Cause((Fail("error"),))
+        assert done == [1, 2, 3]
+
+    await run_guarded(provide_layer(TestClock.layer())(program()))

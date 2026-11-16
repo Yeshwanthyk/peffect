@@ -380,18 +380,18 @@ and independently verified by Sol 6.1.
 
 Pinned `internal/effect.ts:1688-1840` (raceAll, raceAllFirst, interruptRaceLosers, race,
 raceFirst) and `:3929-4007, :6499` (timeoutOrElse, timeout, timeoutOption, TimeoutError). The
-race state machine is `_race` in `fiber.py`, beside `for_each`, for the same B3 reason: it needs
+race algorithms are `race_all` / `race_all_first` in `fiber.py`, beside `for_each`, for the same B3 reason: it needs
 `_start`, `add_observer` and `interrupt_unsafe`. `timeout.py` is non-kernel and composes
 `race_first` with `sleep`. Data-first only.
 
 | # | Invariant | Enforced by | Pinned by |
 |---|---|---|---|
 | RA1 | **Racers are daemons, started at once, always interruptible, in the caller's context.** | `_start(None, eff, parent.context, parent, True, True)` | `test_source_racers_see_the_callers_context_and_run_as_daemons`, `test_source_a_masked_race_still_interrupts_its_loser_and_finishes_first`, :2268, :2281; mask mutation (detected as a deadlock, see UPSTREAM_TESTS) |
-| RA2 | **Winner mode.** `race`/`race_all`: first success wins; `race_first`/`race_all_first`: first exit wins. | `first_exit or isinstance(exit_, Success)` | :1430, :1455, property `test_source_race_matches_the_model_for_any_mix_and_completion_order`; both winner-mode mutations |
+| RA2 | **Winner mode.** `race`/`race_all`: first success wins; `race_first`/`race_all_first`: first exit wins. | separate `race_all` / `race_all_first` observers | :1430, :1455, property `test_source_race_matches_the_model_for_any_mix_and_completion_order`; both winner-mode mutations |
 | RA3 | **All failed: reasons in completion order, defects elected.** | `failures` appended by observers; `Cause(...).elect_defects()` when `settled >= total` | :1449, the property; order mutation |
 | RA4 | **A racer that settles the race while racers start stops later forks.** `race_all` checks after each fork (it read the iterable first); `race_all_first` checks before each fork and reads lazily. | the two `break`s; `list(effects)` only for `race_all`; close lazy iterator on early break | :1534, :1552, the property, `test_source_how_far_each_race_reads_a_lazy_iterable`; both cutoff mutations and the eager-iteration mutation; `test_race_review_regressions.py` pins cleanup and a throwing close |
 | RA5 | **The winner resumes the race before losers are interrupted**, by the racing fiber's id, so a loser's interrupt cannot settle the race. | `win`: `resume` then `interrupt_unsafe(parent.id)` | :1475, :1494, :1513, :1572; loser-interrupt and order mutations |
-| RA6 | **The race returns only after live losers are interrupted and awaited, masked.** An external interrupt interrupts every racer. | `OnExit(Async(register), cleanup)`, `cleanup` = `interrupt_all(live)` | `test_source_the_race_returns_after_loser_cleanup_and_masks_that_wait`, `test_source_interrupting_the_racing_fiber_interrupts_every_racer`; await mutation |
+| RA6 | **The race returns only after live losers are interrupted and awaited, masked.** An external interrupt interrupts every racer. | `_racing`: `OnExit(Async(...), cleanup)`, `cleanup` = `interrupt_all(live)` | `test_source_the_race_returns_after_loser_cleanup_and_masks_that_wait`, `test_source_interrupting_the_racing_fiber_interrupts_every_racer`; await mutation |
 | RA7 | **`timeout_or_else` calls `or_else` lazily, on the caller's fiber, after the source stopped.** | `flat_map(choose)` over `timeout_option` | :2054-:2209, `..._external_interruption_stops_a_pending_fallback`; eager-fallback mutation |
 | RA8 | **`timeout` decodes its duration when called and fails with a fresh `TimeoutError("Operation timed out after '<format>'")`.** `timeout_option`/`timeout_or_else` decode when run. | `from_input_unsafe` in `timeout`; `Duration.format` port | :2289, :2304, :2317, `test_source_invalid_durations_fail_where_upstream_decodes_them`, `test_duration_format_upstream.py` |
 | RA9 | **Typed channels join**: one type variable per channel, so pyright widens A, E and R to both sides' unions (`Never` with `Never` stays `Never`); `timeout` adds `TimeoutError`, `timeout_option` wraps in `Option`. | signatures | typetests `race_types`, `timeout_types`; should_fail 106-113 |
@@ -491,3 +491,91 @@ kernel-module check removed (2026-11-15).
 Definition defaults, decorators, and class bases are checked in their enclosing scope. Export
 metadata must be a single literal list/tuple of strings; computed or mutated declarations fail
 with exit 2. CLI regressions cover both rules (2026-11-15 independent review corrections).
+
+## Ref and SynchronizedRef
+
+| ID | Contract | Enforcement | Evidence |
+|---|---|---|---|
+| RF1 | Each pure cell operation reads, computes and assigns in one synchronous effect step. Raising callbacks assign nothing; user in-place mutations are not rolled back. | Ref sync bodies | test_ref_upstream.py; sequential model property |
+| SR1 | Pure and effectful writes hold one semaphore permit; effectful callbacks read after acquisition. | with_permit and suspend | queued set, FIFO, laziness and mutual-exclusion tests |
+| SR2 | Only a successful callback continuation assigns. Interruption before assignment leaves the slot unchanged; an interrupted exit can follow a completed assignment. Permit cleanup always runs. | success continuation and Semaphore finalization | four operation-by-operation sweeps; concurrent model property |
+| SR3 | Reads are unlocked; writes are not reentrant. | get bypasses semaphore | unlocked-read test; manual-scheduler quiescence regression |
+
+Both classes are invariant. Explicit generic classmethod constructors are required by strict
+Pyright; this is not runtime validation. Some(None) is a present replacement. Evidence is
+bounded runtime/property testing, not formal verification.
+
+## Atomic delivery and Pull completion
+
+Queue's accepted prerequisites at Effect v4 pin `289a53f7`; operational contracts follow below.
+
+| ID | Contract | Enforcement | Evidence |
+|---|---|---|---|
+| QP1 | A lazy thunk returning a terminal Exit delivers it to its first continuation in the same operation. A pending interrupt or budget yield cannot occur between removal and that delivery. Later interruption is allowed; this is not rollback. | Kernel `suspend_exit`, folding final Success/Failure nodes; nonterminal nodes delegate normally | `test_suspend_exit.py`: sync sensitivity control, terminal success/failure, reentrant interrupt, 16-index operation sweep, lazy reuse, async delegation, raising thunk |
+| QP2 | Done is an ordinary Fail payload with a covariant, read-only leftover. The default void value is shared; Python None represents void. It adds no Cause reason or runtime protocol. | `cause.Done`, `is_done`; `pull.done` | `test_pull_upstream.py`; positive and negative prerequisite type fixtures |
+| QP3 | A completion filter succeeds with the first Done only when no non-Done failure/defect exists. Interrupt reasons alone do not prevent completion. Mixed real failures retain their order and interrupts, with every Done stripped. Without Done, the original Cause is retained. | `pull.filter_done`, `done_exit_from_cause`, `catch_done` | Six Pull.test.ts ports plus mixed-reason, first-None, handler-failure and actual-interruption cases |
+| QP4 | Handling Done removes it from the error channel while preserving ordinary errors, handler errors and both environments. Filters retain the leftover type. | Exact-Done-first overloads, shared environment type variable, bottom-channel overloads | `queue_prerequisite_type_contracts`; should_fail 127-133 |
+
+Python uses Exit as the filter's data carrier because Result is not ported. No Pull wrapper
+is introduced. Only the completion prefix is implemented; the remaining Pull operators are
+deferred to the Stream lane. `catch_tag(Done, ...)` does not implement QP3: it may recover a
+Done while discarding an ordinary typed failure merged with it.
+
+The formal kernel model abstracts ordinary computation and continuation values. It does not
+model QP1's message ownership, Done payloads or completion filtering. `suspend_exit` delegates
+to existing Success/Failure evaluation and introduces no independent write to the protocol
+fields. Protocol reruns and break sensitivity accompany runtime checks; a TLC pass is not a
+proof of Queue no-loss behavior. The reentrant test captures its fiber with WithFiber:
+`on_fiber_start` observes only a fiber still live after its initial evaluation slice.
+
+## Queue
+
+`Queue` owns its FIFO buffer, creator dispatcher, ordered takers/offers/awaiters and
+terminal outcome. Active state with no terminal outcome is Open; active state with one
+is Closing; Done retains only that outcome. No other object owns a reservation. A taker
+wake asks it to retry. Single and batch producers own only their unadmitted suffix.
+
+| Trigger | Open | Closing | Done |
+|---|---|---|---|
+| Offer | admit according to strategy; otherwise suspend or reject | reject new input | reject new input |
+| End/fail/interrupt | store first terminal outcome; close immediately if empty, otherwise drain | false; retain first outcome | false; retain outcome |
+| Take/clear | consume FIFO, refill from pending offers | consume buffer and pending offers, finalize when drained | terminal failure; clear handles Done |
+| Shutdown | discard buffer, publish interrupt, return pending suffixes | discard buffer, publish stored outcome, return suffixes | false |
+| Cancel waiter | remove only its token; admitted prefixes remain | same; cancelling last offer may finalize | no state change |
+
+| Strategy | Full positive capacity | Zero capacity |
+|---|---|---|
+| suspend/bounded | unsafe rejects; effect parks producer until admitted/cancelled/completed | pending offers rendezvous with takers; batches drain one pending element per read |
+| dropping | reject overflow and return unaccepted batch suffix | only waiting takers provide admission slots |
+| sliding | evict oldest messages, retain newest | discard without takers; retain newest waiting handoffs |
+| unbounded | append FIFO | unbounded uses positive infinity, not zero |
+
+| ID | Contract | Enforcement | Evidence |
+|---|---|---|---|
+| Q1 | Destructive reads transfer a message exactly once to their first accepting continuation, including producer reentry that interrupts that consumer. Later effects/interruption do not roll back removal. | take, take_between, poll, clear use suspend_exit | operation-boundary no-loss sweep; forced reentrant interrupt; extra-step mutant |
+| Q2 | Pending ownership is removed/advanced before producer resumption; callbacks may take, offer, cancel or shut down synchronously. Capacity is re-read after each callback. | _take_offer and _release_capacity; live ordered registry | reentry ports, callback-defect case, live waiter insertion, producer ledger |
+| Q3 | Cancellation removes only its registration; cancelling a producer retains admitted prefix, withdraws unadmitted suffix. Cancelling a taker cannot steal an offer. | token-owned async_ cancellation finalizers | cancellation sweeps; independent producer/reader ledgers; keep-offer mutant |
+| Q4 | First completion wins, admits no new offers, and drains existing buffer/pending offers. Done is published before notifying takers/awaiters. Shutdown discards buffered ownership immediately and returns pending suffixes. | fail_cause_unsafe, _finalize, shutdown_unsafe | completion/drain/shutdown ports and ledger transitions; premature/absent finalization mutants |
+| Q5 | FIFO holds within retained buffer and pending offers; sliding/dropping have explicit eviction/rejection owners. Immediate new offers are not promised fairness against parked producers. | deque and ordered registry | three independent per-ID ledger properties; LIFO and sliding mutants |
+| Q6 | Batch input is copied. Counts floor positive fractions, map NaN/nonpositive to zero, retain infinity. n greater than capacity can return a capacity-sized batch; Closing permits short drain; terminal outcome precedes zero bounds. | offer_all_unsafe, _count, _can_take, take_between | batch/count/rendezvous ports; real vendor differential |
+| Q7 | flush wakes ready takers synchronously without draining/completing; it does not reset a pending scheduled release. One creator-dispatcher task coalesces offers until it runs, independently of consumer scheduler. | _schedule_takers and flush_unsafe | exact task counts, separate consumer scheduler, coalescing mutant |
+| Q8 | take/peek retain E; clear/collect/await_ remove Done but preserve real errors and cause order. poll returns Some(None) for a None message and None for empty/terminal. peek sees only buffered data. await_ waits for Done, not merely Closing. | Pull completion filter and public overloads | mixed Done/Fail/Die/Interrupt ports; positive and negative channel fixtures |
+| Q9 | into restores producer interruptibility, then publishes its failure or Done while masked; success values are never enqueued. Its E is Never and R is the producer's R. | uninterruptible_mask, exit_, fail_cause/end | into outcome ports and real differential; error-publication mutant; typetests |
+| Q10 | Queue is invariant in A/E; Enqueue contravariant in A/E; Dequeue covariant in A/E. Views preserve identity and restrict available methods. | nominal capability bases; receiver-bound fresh batch results | positive/negative tests for each variance axis, capability and into requirements |
+
+Raw capacities are source-compatible, not validated integers. `is_full` compares equality
+with capacity, including zero. Fractional admission/eviction and pending-batch overfill,
+NaN admission/readiness and negative takeN's defect have explicit characterizations. Do
+not infer normal bounded-capacity safety from these pathological inputs. Negative-capacity
+take can retry indefinitely in the vendor and is not started by the suite.
+
+For generic payload types, use `Done[X | Y]` rather than `Done[X] | Done[Y]` when combining
+completion channels. Pyright does not fully subtract several separately instantiated Done
+members from a union; runtime filtering removes them all. Pure Done, void Done, ordinary
+errors, bottom types, and canonical payload unions have checked exclusion contracts.
+
+Evidence is bounded runtime/property exploration and a real vendor differential, not a Queue
+formal proof. The unchanged kernel model abstracts messages, ownership and callback values.
+No cross-thread safety, retry/requeue guarantee, or Stream integration is claimed. The worker
+example uses Scope, services, typed job/source errors, deterministic gates and backpressure;
+it joins workers after await_ to include work already removed from the Queue.

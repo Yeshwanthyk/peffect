@@ -1,0 +1,70 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+body{font-family:var(--font-sans);color:var(--foreground);margin:0}
+p{line-height:1.5} .note{padding:16px;background:var(--secondary);border-radius:var(--radius);margin:12px 0}
+table{width:100%;border-collapse:collapse;font-size:13px} td,th{text-align:left;padding:10px 6px;border-bottom:1px solid var(--border);vertical-align:top}
+small{color:var(--muted-foreground)} h3{font-size:17px;margin:20px 0 8px}
+</style></head><body>
+<div class="note"><strong>Queue is already owned by the implementation thread.</strong><br>Finish its acceptance/release. The next new unit is <strong>Schedule + retry/repeat</strong>, proved with a real-I/O worker.</div>
+<script src="https://cdn.jsdelivr.net/gh/Yeshwanthyk/agent-skills@ae0dcfc76376bca3cd7370863f142818e928b9df/skills/viz/assets/viz.js"></script>
+<script type="text/viz">
+title Foundations after Queue
+sub Source relationships, not a serial build order. Proposed Python pieces carry ?.
+base ../../../
+== graph Shared completion and application value
+view: flow
+foundation: Existing Effect + Clock + Scope @src/peffect/__init__.py:1
+  note: Present at da88bfc; includes fibers, Layer, ManagedRuntime, Ref and SynchronizedRef.
+?done: Incoming Done / Pull @vendor/effect-v4/packages/effect/src/Pull.ts:238
+  note: Parent Queue work owns this. Accepted Python API must be checked after delivery.
+?queue: Queue delivery already owned @vendor/effect-v4/packages/effect/src/Queue.ts:2041
+  note: Atomic dequeue proof and operational API remain parent responsibilities.
+?schedule: NEXT Schedule + retry @vendor/effect-v4/packages/effect/src/internal/schedule.ts:64
+  note: Deterministic policies, metadata, repeat. No Queue dependency.
+?adapter: Async client layer @src/peffect/core.py:940
+  note: Existing attempt supports awaitables. Adapter and real I/O proof are new work.
+?app: Resilient snapshot worker @docs/APPLICATION_PATTERN_AUDIT.md:60
+  note: Proposed real HTTP app extends the parent's Queue worker.
+foundation -> done: substrate
+done -> queue: completion
+done -> schedule: completion
+foundation -> adapter: existing bridge
+queue -> app: bounded jobs
+schedule -> app: retry and pacing
+adapter -> app: actual I/O
+== graph Independent resource foundations
+view: flow
+foundation: Existing fibers + scopes @src/peffect/__init__.py:1
+?cache: Cache @vendor/effect-v4/packages/effect/src/Cache.ts:430
+  note: Keyed shared lookup; cancellation/entry identity is the hard part. Queue not required.
+?scoped: ScopedRef @vendor/effect-v4/packages/effect/src/ScopedRef.ts:182
+  note: Acquire candidate, close old, publish new. Not a borrower lease.
+?rcmap: RcMap when leases needed @vendor/effect-v4/packages/effect/src/RcMap.ts:346
+  note: Scope-bound reference counts. Independent of Cache and Queue.
+foundation -> cache: fibers and context
+foundation -> scoped: synchronized state and scopes
+foundation -> rcmap: acquisition and leases
+== graph Later streaming and subscriptions
+view: flow
+?pull: Incoming Done / Pull @vendor/effect-v4/packages/effect/src/Pull.ts:238
+?channel: Minimal scoped Channel boundary @vendor/effect-v4/packages/effect/src/Stream.ts:581
+  note: Exact upstream wrapper uses Channel. Python minimal substrate remains a design choice.
+?stream: Sequential Stream @vendor/effect-v4/packages/effect/src/Stream.ts:999
+  note: Lazy scoped sources, map, take, run; concurrency later.
+?pubsub: PubSub @vendor/effect-v4/packages/effect/src/PubSub.ts:1259
+?subref: SubscriptionRef @vendor/effect-v4/packages/effect/src/SubscriptionRef.ts:116
+  note: Replay-1 PubSub plus Stream and serialized updates.
+pull -> channel: completion
+channel -> stream: scoped pulls
+pubsub -> subref: replay
+stream -> subref: changes stream
+</script>
+<h3>New work ranked after Queue</h3>
+<table><thead><tr><th>Priority</th><th>Value</th><th>Effort estimate</th></tr></thead><tbody>
+<tr><td>1 · Schedule / retry</td><td>Recovery and polling for workers and clients</td><td>2–4 days</td></tr>
+<tr><td>2 · Real async integration</td><td>Useful app; prove transport cancellation and resource cleanup</td><td>1–3 days</td></tr>
+<tr><td>3 · Cache</td><td>Shared lookups and bounded TTL retention</td><td>3–6 days</td></tr>
+<tr><td>4 · ScopedRef</td><td>Replace resource-owning generations</td><td>1–3 days</td></tr>
+<tr><td>5 · Sequential Stream</td><td>Lazy paged ingestion and future change feeds</td><td>4–8 days</td></tr>
+</tbody></table>
+<p><small>Engineering-effort estimates, including proof/review—not agent elapsed time. All proposed capabilities are unimplemented at the inspected baseline. No implementation or test campaign ran in this research.</small></p>
+</body></html>

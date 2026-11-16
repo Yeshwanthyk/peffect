@@ -1,6 +1,16 @@
 """peffect: Effect-style programs for Python. See docs/DESIGN.md."""
 
-from peffect.cause import Cause, DefectError, Die, Fail, FailureError, Interrupt, Interrupted
+from peffect.cause import (
+    Cause,
+    DefectError,
+    Die,
+    Done,
+    Fail,
+    FailureError,
+    Interrupt,
+    Interrupted,
+    is_done,
+)
 from peffect.clock import (
     Clock,
     ClockService,
@@ -39,6 +49,7 @@ from peffect.core import (
     on_interrupt,
     succeed,
     suspend,
+    suspend_exit,
     sync,
     tap,
     uninterruptible,
@@ -76,6 +87,9 @@ from peffect.latch import Latch
 from peffect.layer import CurrentMemoMap, Layer, MemoMap, provide_layer
 from peffect.managed_runtime import ManagedRuntime
 from peffect.option import Option, Some
+from peffect.pull import done
+from peffect.queue import Dequeue, Enqueue, Queue
+from peffect.ref import Ref
 from peffect.resources import acquire_release, acquire_use_release, add_finalizer
 from peffect.scheduler import MaxOpsBeforeYield, PreventSchedulerYield, Scheduler
 from peffect.scope import (
@@ -89,6 +103,7 @@ from peffect.scope import (
     scoped,
 )
 from peffect.semaphore import Semaphore
+from peffect.synchronized_ref import SynchronizedRef
 from peffect.timeout import TimeoutError, timeout, timeout_option, timeout_or_else
 
 __all__ = [
@@ -102,9 +117,12 @@ __all__ = [
     "CurrentMemoMap",
     "DefectError",
     "Deferred",
+    "Dequeue",
     "Die",
     "Do",
+    "Done",
     "Effect",
+    "Enqueue",
     "Exit",
     "Fail",
     "Failure",
@@ -122,6 +140,8 @@ __all__ = [
     "MixedScheduler",
     "Option",
     "PreventSchedulerYield",
+    "Queue",
+    "Ref",
     "Reference",
     "RootRunner",
     "Scheduler",
@@ -132,6 +152,7 @@ __all__ = [
     "Semaphore",
     "Some",
     "Success",
+    "SynchronizedRef",
     "Tag",
     "TimeoutError",
     "acquire_release",
@@ -148,6 +169,7 @@ __all__ = [
     "current_time_millis",
     "current_time_nanos",
     "die",
+    "done",
     "ensuring",
     "exit_",
     "fail",
@@ -163,6 +185,7 @@ __all__ = [
     "gen",
     "interrupt_all",
     "interruptible",
+    "is_done",
     "monotonic_time_nanos",
     "never",
     "on_error",
@@ -186,6 +209,7 @@ __all__ = [
     "sleep",
     "succeed",
     "suspend",
+    "suspend_exit",
     "sync",
     "tap",
     "timeout",

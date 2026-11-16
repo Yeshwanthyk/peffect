@@ -32,7 +32,31 @@ Why the model's pass still means something with them added (an argument, not a c
 nor holds back an interrupt, and the model's "the interrupt unwinds to the top" still describes
 the code.
 
-**Sync:** 2026-11-15, racing and timeouts unit: no model change. `_race` (fiber.py) and
+**Sync:** 2026-11-16, approved race/traversal refactor: no model change. `race_all` and
+`race_all_first` now own their algorithms; `_racing`, `_fork_racer` and `_interrupt_losers`
+share their unchanged Async/observer/OnExit lifecycle. Traversal separates ready-Exit stepping
+from `_run_window`, whose parent and resume are required, and separates record/pump/finish.
+No modeled field or protocol transition changes; traversal workers and racers still start
+through `_start`. TLC 1.7.4 explored 2232 states, depth 21, every configured rule holds;
+24 linked tests passed. All seven `Break_*.cfg` exited 1. The isolated `_done` no-wait
+mutation made `run.sh` fail three linked tests; production fiber SHA256 stayed unchanged.
+Race iteration, winner-before-interrupt ordering, cutoff, iterator close (including throws),
+masked loser awaiting, traversal refill/fail-fast and Queue reserve-before-resume remain runtime
+contracts, outside this model. The full library verifier passed (892 tests); isolated behavior
+mutations were red. Evidence and bounded scope: `untangle-log.md`, approved refactor section.
+
+Previous Sync, 2026-11-16, Queue prerequisites: no model change. The new `SuspendExit` node
+delegates terminal results to existing Success/Failure evaluation inside its own operation;
+nonterminal results return to the loop. It adds no protocol-field write or new park, wake,
+mask, child or publication transition. The model abstracts ordinary computation and
+continuation values: it does not prove the no-loss handoff or Pull cause filtering.
+Runtime tests pin those contracts (INVARIANTS QP1-QP4), including budget-boundary and
+reentrant interrupts. TLC 1.7.4 explored 2232 states, depth 21, every configured rule holds;
+24 linked tests passed. All seven `Break_*.cfg` exited 1. A `_done` no-wait mutation in an
+isolated package copy made `run.sh` fail three linked tests; production hashes stayed
+unchanged. A separate terminal-extra-step mutation failed four prerequisite cases.
+
+Previous Sync, 2026-11-15, racing and timeouts unit: no model change. `_race` (fiber.py) and
 `timeout.py` add no transition: racers start through `_start` as parentless daemons (not
 modeled), the race parks through `Async`, settles through observers, and cleans up in an `OnExit`
 frame with `interrupt_all`; none writes `_deferred`, `_parked`, `Park.done`, `_exit`, `children`

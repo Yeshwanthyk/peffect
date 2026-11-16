@@ -18,9 +18,55 @@ an exception. `die()` still takes an exception; only election makes a non-except
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Generic, Never, TypeVar, final
+from typing import ClassVar, Generic, Never, Self, TypeIs, TypeVar, final, overload
 
 E_co = TypeVar("E_co", covariant=True)
+
+
+@final
+class Done[A = None]:
+    """Normal input completion, carried as Fail(Done(value)), not as a new Reason.
+
+    Effect v4 internal/core.ts:739-767. Python None represents the void leftover.
+    The read-only payload follows Some's immutable, covariant representation.
+    """
+
+    __slots__ = ("_value",)
+    __match_args__ = ("value",)
+    _value: A
+    _void: ClassVar[Self | None] = None
+
+    def __new__(cls, value: A | None = None) -> Self:
+        if value is None:
+            if cls._void is None:
+                cls._void = super().__new__(cls)
+            return cls._void
+        return super().__new__(cls)
+
+    @overload
+    def __init__(self: Done[None]) -> None: ...
+    @overload
+    def __init__(self, value: A) -> None: ...
+    def __init__(self, value: object = None) -> None:
+        object.__setattr__(self, "_value", value)
+
+    @property
+    def value(self) -> A:
+        return self._value
+
+    def __setattr__(self, name: str, value: object) -> None:
+        raise AttributeError(f"Done is immutable: cannot set {name!r}")
+
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError(f"Done is immutable: cannot delete {name!r}")
+
+    def __repr__(self) -> str:
+        return f"Done({self._value!r})"
+
+
+def is_done(value: object) -> TypeIs[Done[object]]:
+    """Recognize the nominal Python completion value (Cause.ts:1286)."""
+    return isinstance(value, Done)
 
 
 @final

@@ -48,9 +48,9 @@ increment, not a claim that the full runtime or its fidelity gaps are complete.
 | 2 ✓ | Clock as a Reference, TestClock | Clock.ts (333), testing/TestClock.ts | `clock.py`, `testing/` | Reference + `Async` | `sleep` under TestClock never touches the loop timer |
 | 2 | Scope | Scope.ts (573) | `scope.py` | finalizers run masked, reverse order, get the Exit | prop: every added finalizer runs once, in reverse |
 | 3 | Deferred, Latch | Deferred.ts (946), Latch.ts (394) | `deferred.py` | waiter list + `Async` | formal: waiter-list model (no lost wakeup, interrupted waiter leaves the list) |
-| 3 | Ref, SynchronizedRef | Ref.ts (765) | `ref.py` | plain cell; Sync | — |
+| 3 ✓ | Ref, SynchronizedRef | Ref.ts, SynchronizedRef.ts | `ref.py`, `synchronized_ref.py` | Sync + Semaphore | upstream ports, generated models, interrupt sweeps |
 | 3 | Semaphore | Semaphore.ts (696) | `semaphore.py` | waiter list + `Async` | prop: permits never negative, never above max, under random interrupts |
-| 3 | Queue (bounded, dropping, sliding) | Queue.ts (2,175) | `queue.py` | two waiter lists | prop: no item lost or duplicated when takers are interrupted |
+| 3 (impl) | Queue (bounded, dropping, sliding, unbounded) | Queue.ts (2,175) | `queue.py` | public suspension, dispatcher and atomic Exit delivery | upstream ports, controlled interrupt/reentry sweeps, ownership ledgers and real vendor differential |
 | 3 (part ✓) | `all_`, `for_each(concurrency=)` ✓, `race` ✓, `timeout` ✓, FiberSet | effect.ts | `concurrent.py` | fork + observers + Semaphore + Clock | prop: losers interrupted and awaited before the result (K8 for combinators) |
 | 4 | Layer, MemoMap, ManagedRuntime | Layer.ts (2,856), ManagedRuntime.ts (474) | `layer.py`, `runtime.py` | Context + Scope + Deferred | a shared layer builds once; release in reverse; typetests on `Layer[ROut, E, RIn]` |
 | 5 | Duration, Schedule, `retry`, `repeat` | Schedule.ts (1,583) | `schedule.py` | Clock + `sleep` | TestClock: recorded delays match the schedule exactly |
@@ -221,3 +221,21 @@ The 16 missing-TestClock draft tests remain deferred. ManagedRuntime's async sli
 implemented and independently reviewed: 54 focused tests pass, including integrated typing
 and boundaries. Its disposal contracts and proof limits are recorded in INVARIANTS MR1–MR9.
 This does not extend the earlier application acceptance to untested runtime scenarios.
+
+Queue prerequisite unit: `suspend_exit` folds terminal delivery into the thunk's step;
+`Done`, `done` and the genuine minimal `pull` completion API provide typed end-of-input.
+The kernel protocol and cause representation are unchanged. Invariants QP1-QP4 and the
+source-anchored tests distinguish atomic delivery from later cancellation and preserve real
+failures merged with Done. Queue strategies/lifecycle/batches and remaining Pull operators
+are still pending; this prerequisite unit does not mark Queue or Stream complete.
+
+
+Queue operational unit (implementation; independent review pending): all 39 value operations
+and Queue/Enqueue/Dequeue capability types are implemented over public combinators. No further
+kernel changes. Includes all strategies, raw capacity/count compatibility, waiter cancellation,
+graceful completion/drain, immediate shutdown, batches, flush scheduling, into, channel/variance
+gates and a composed scoped worker example. Source map: `QUEUE_SOURCE_MAP.md`; invariants
+Q1-Q10; lesson 08. Tests were committed red before implementation. Bounded vendor differential
+and isolated mutation sensitivity accompany generated ownership ledgers; these are not formal
+Queue verification. Only upstream state metadata and Pipeable/Inspectable/JSON spellings are
+excluded from this operational surface. Schedule/retry/repeat is the next primitive lane.
