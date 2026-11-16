@@ -250,4 +250,3 @@ Breadth coverage is an inventory plus focused source samples, **not an exhaustiv
 ## Decision
 
 **After Queue is accepted: implement the deterministic Schedule/retry/repeat unit, reusing its accepted Done/Pull contract, then prove it through the real-I/O snapshot worker.** Keep the thin async integration next to that app first. Follow with Cache; use ScopedRef or RcMap when the app demonstrates replacement versus borrower-lease ownership; grow the Stream boundary before the broad streaming ecosystem.
-

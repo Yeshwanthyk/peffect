@@ -2,7 +2,7 @@
 
 <t3-thread://v2/c94b318d-6569-4fbb-ada1-8f29f58f639f/thread:delegated-task:command%3Amcp%3A2bb3f3e0-03ef-4a0d-af8e-26799735b205%3Adelegate-task%3Apeffect-roi-codex-3>
 
-Method: research — trace the assigned lifecycle candidates to source evidence for the lead.  
+Method: research — trace the assigned lifecycle candidates to source evidence for the lead.
 Plan: Find the source of truth → Gather evidence → Synthesize findings · ends: compact evidence report with exact paths and lines.
 
 PASS — live checkout is clean at `da88bfccb383d660fd96bf78d33ca0207bd658dd` (`build/primitives`); the vendor is pinned at `289a53f7b1fc40049219c6e69022db2fb859c356`.
@@ -23,5 +23,5 @@ PASS — live checkout is clean at `da88bfccb383d660fd96bf78d33ca0207bd658dd` (`
 
 **Boundary observation:** existing `resources.py` imports core and Scope; `scope.py` builds finalizers using Cause, Context, core, and fiber ownership (`../../../src/peffect/resources.py:13-24`, `../../../src/peffect/scope.py:26-43`). Ref and SynchronizedRef are available; SynchronizedRef depends on Semaphore (`../../../src/peffect/synchronized_ref.py:23-26`). This supports implementing these candidates as separate Python modules over current primitives, subject to verifying exact effect operations and cancellation contracts; source imports alone are not dependency proof.
 
-No tests or fresh scenario runs were performed.  
+No tests or fresh scenario runs were performed.
 Used: research, yesh-router · playbook: — · principles: — · steps 3/4 (skip: Write one Markdown file — task explicitly forbids writes)

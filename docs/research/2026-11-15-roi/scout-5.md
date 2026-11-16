@@ -2,7 +2,7 @@
 
 <t3-thread://v2/c94b318d-6569-4fbb-ada1-8f29f58f639f/thread:delegated-task:command%3Amcp%3A2bb3f3e0-03ef-4a0d-af8e-26799735b205%3Adelegate-task%3Apeffect-roi-codex-5>
 
-Method: research — inspect Config, Schema, validation source and repo docs for concrete app reuse and Python boundary.  
+Method: research — inspect Config, Schema, validation source and repo docs for concrete app reuse and Python boundary.
 Plan: Define the question → Gather sources → Compare and synthesize → ends: compact source evidence for the lead agent.
 
 Live checkout is at the assigned baseline, and the vendor worktree reports no local changes. I’m tracing only source and documentation for Config/Schema and the Python-specific boundary; no test run or edits.

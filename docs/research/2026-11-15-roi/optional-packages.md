@@ -60,4 +60,3 @@ After Queue acceptance: a FastAPI webhook service validates input, puts bounded 
 
 ## Deferred / limits
 RPC, cluster and durable workflow packages unlock narrower, harder distributed guarantees; downloads alone do not justify implementing them early. SSE/WebSockets/streaming bodies add lifetime and backpressure requirements; buffered HTTP does not need general Stream first. Pydantic validation is already used, so a wrapper needs demonstrated boilerplate savings. No broad PyPI download comparison was collected, so Python usefulness order is engineering judgment, not a measured Python popularity ranking. No implementation or tests were run. Only scratch research artifacts were written.
-

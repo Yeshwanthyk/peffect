@@ -4,7 +4,7 @@
 
 I’ll read the required router and repo instructions first, then inspect the live checkout and only the stream/dataflow files needed for downstream scope evidence.
 
-Method: how — inspect the stream/dataflow source path to assess downstream unlocks and prerequisite cost.  
+Method: how — inspect the stream/dataflow source path to assess downstream unlocks and prerequisite cost.
 Plan: Choose a view → Gather evidence → Explain the execution path · ends: compact source evidence for the parent to synthesize.
 
 **PASS** — the live checkout is at baseline `da88bfccb383d660fd96bf78d33ca0207bd658dd`, and the read-only vendor is pinned at `289a53f7b1fc40049219c6e69022db2fb859c356`. The reported app-scenario and test counts were not re-run. I found no local PubSub, Stream, Channel, Pull, or Queue module; the existing scout note and vendored upstream source provide the evidence below.
