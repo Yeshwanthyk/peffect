@@ -638,3 +638,32 @@ def ref_type_mistakes() -> None:
     _bare_sync = SynchronizedRef.make_unsafe(1)
     # 126. SYNC_REF_BARE_MAKE
     _bare_sync_effect = SynchronizedRef.make(1)
+
+
+def queue_prerequisite_type_mistakes() -> None:
+    from peffect.pull import catch_done
+
+    from peffect import Done, done, suspend_exit
+
+    def handle(leftover: str) -> Effect[int, RaceErrB, RaceB]:
+        return fail(RaceErrB(leftover))
+
+    def mixed() -> Effect[str, RaceErrA | Done[str], RaceA]:
+        return fail(RaceErrA())
+
+    # 127. DONE_PAYLOAD_LOST
+    _wrong_payload: Done[int] = Done("leftover")
+    # 128. DONE_EFFECT_ERROR_LOST
+    _no_done: Effect[Never, Never, Never] = done("leftover")
+    # 129. PULL_ORDINARY_ERROR_LOST
+    _no_ordinary: Effect[str | int, RaceErrB, RaceA | RaceB] = catch_done(mixed(), handle)
+    # 130. PULL_HANDLER_ERROR_LOST
+    _no_handler_error: Effect[str | int, RaceErrA, RaceA | RaceB] = catch_done(mixed(), handle)
+    # 131. PULL_REQUIREMENT_LOST
+    _no_handler_requirement: Effect[str | int, RaceErrA | RaceErrB, RaceA] = catch_done(
+        mixed(), handle
+    )
+    # 132. SUSPEND_EXIT_ERROR_LOST
+    _no_error: Effect[int, Never, RaceA] = suspend_exit(race_left)
+    # 133. SUSPEND_EXIT_REQUIREMENT_LOST
+    _no_requirement: Effect[int, RaceErrA, Never] = suspend_exit(race_left)

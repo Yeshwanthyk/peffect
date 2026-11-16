@@ -730,3 +730,39 @@ def ref_type_contracts() -> None:
         assert_type(r.update_some_and_get_effect(lambda _: opt), Effect[int, str, Users])
 
     assert callable(checked)
+
+
+def queue_prerequisite_type_contracts() -> None:
+    from peffect.pull import catch_done, done_exit_from_cause, filter_done
+
+    from peffect import Done, done, suspend_exit
+
+    assert_type(Done(), Done[None])
+    assert_type(Done("leftover"), Done[str])
+    assert_type(done(), Effect[Never, Done[None], Never])
+    assert_type(done("leftover"), Effect[Never, Done[str], Never])
+
+    def checked(
+        pure_done: Effect[int, Done[str], RaceA],
+        mixed: Effect[int, NotFound | Done[str], RaceA],
+        ordinary: Effect[int, NotFound, RaceA],
+        success: Effect[int, Never, RaceA],
+        cause: Cause[NotFound | Done[str]],
+    ) -> None:
+        def recover(leftover: str) -> Effect[float, Timeout, Users]:
+            return fail(Timeout(leftover))
+
+        assert_type(suspend_exit(lambda: mixed), Effect[int, NotFound | Done[str], RaceA])
+        assert_type(catch_done(pure_done, recover), Effect[int | float, Timeout, RaceA | Users])
+        assert_type(
+            catch_done(mixed, recover), Effect[int | float, NotFound | Timeout, RaceA | Users]
+        )
+        assert_type(
+            catch_done(ordinary, recover), Effect[int | float, NotFound | Timeout, RaceA | Users]
+        )
+        assert_type(catch_done(success, recover), Effect[int | float, Timeout, RaceA | Users])
+        assert_type(filter_done(cause), Exit[Done[str], NotFound])
+        assert_type(done_exit_from_cause(cause), Exit[str, NotFound])
+        assert_type(done_exit_from_cause(Cause.fail(Done("left"))), Exit[str, Never])
+
+    assert callable(checked)
