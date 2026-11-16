@@ -431,3 +431,23 @@ the logger is header-only (no spans, annotations or cause rendering); Console ha
 TestClock review regressions: `test_nan_set_time_wakes_pending_sleep` preserves the upstream
 `>` break condition for unordered NaN targets; `test_no_loggers_does_not_read_clock` pins the
 empty-logger fast path. Negative typetests 119–120 reject filter sentinels as emitted severities.
+
+## Ref and SynchronizedRef
+
+All 15 Ref.test.ts and eight SynchronizedRef.test.ts cases are ported in the two named test
+files. The creator-interruption case replaces unported Deferred.complete with explicit
+creation and publication. Derived cases pin laziness, Some(None), unlocked reads, queued
+writes, callback failures, operation-level interruption and non-reentrancy. test_ref_props.py
+checks sequential results and serialized concurrent updates against source-derived models.
+
+The concurrent property disables automatic yields; separate operation-budget sweeps cover
+interruptions after callback production and after assignment. Hypothesis discarded draws
+were engine size overruns, not application assumptions. Author mutation checks killed ten
+mutants; two truthiness replacements are equivalent for Some (always truthy). Three
+property-only mutants also fail. Independent review passed; parent integration verification follows.
+
+Methods replace dual call forms. Pipeable, Inspectable and JSON inspection are not ported.
+
+Ref adaptation: `set` returns Python None, following the declared void contract. The pinned
+vendor implementation returns its backing MutableRef at runtime despite declaring void;
+that incidental return value is not reproduced (also applies to SynchronizedRef.set).

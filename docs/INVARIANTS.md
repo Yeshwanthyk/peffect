@@ -491,3 +491,16 @@ kernel-module check removed (2026-11-15).
 Definition defaults, decorators, and class bases are checked in their enclosing scope. Export
 metadata must be a single literal list/tuple of strings; computed or mutated declarations fail
 with exit 2. CLI regressions cover both rules (2026-11-15 independent review corrections).
+
+## Ref and SynchronizedRef
+
+| ID | Contract | Enforcement | Evidence |
+|---|---|---|---|
+| RF1 | Each pure cell operation reads, computes and assigns in one synchronous effect step. Raising callbacks assign nothing; user in-place mutations are not rolled back. | Ref sync bodies | test_ref_upstream.py; sequential model property |
+| SR1 | Pure and effectful writes hold one semaphore permit; effectful callbacks read after acquisition. | with_permit and suspend | queued set, FIFO, laziness and mutual-exclusion tests |
+| SR2 | Only a successful callback continuation assigns. Interruption before assignment leaves the slot unchanged; an interrupted exit can follow a completed assignment. Permit cleanup always runs. | success continuation and Semaphore finalization | four operation-by-operation sweeps; concurrent model property |
+| SR3 | Reads are unlocked; writes are not reentrant. | get bypasses semaphore | unlocked-read test; manual-scheduler quiescence regression |
+
+Both classes are invariant. Explicit generic classmethod constructors are required by strict
+Pyright; this is not runtime validation. Some(None) is a present replacement. Evidence is
+bounded runtime/property testing, not formal verification.

@@ -12,6 +12,13 @@ transcribed from Ref.ts and SynchronizedRef.ts operation by operation, not from 
 2. SynchronizedRef, concurrent. Entry point: the real SynchronizedRef, operations forked as
    fibers (start_immediately) on the default scheduler; the driver interleaves by spawning,
    opening gates, interrupting, and single yield_now turns: no clocks, sleeps or timers.
+   Control: PreventSchedulerYield, so no fiber yields on its op budget (fiber.py run loop: the
+   budget yield is its only break other than parking or ending). A fiber therefore switches
+   only where it parks (a gate, the permit queue) or at the driver's own steps, and the driver
+   interrupts only parked or not-yet-resumed fibers. Interrupts at arbitrary op boundaries are
+   swept deterministically in test_synchronized_ref_upstream.py instead; that sweep is where a
+   pure call exits interrupted after its write, and where an effectful call is interrupted
+   after its function produced a value, before or after the write.
    Domain: all 11 pure updates and all 8 effectful ones; an effectful function may wait on its
    own gate and then succeeds, fails, or dies. Every user function logs `enter` with the value
    it was given and `exit` (an effectful one through `ensuring`, so interruption logs it too).
@@ -19,26 +26,32 @@ transcribed from Ref.ts and SynchronizedRef.ts operation by operation, not from 
    inside it, and writes only from the function's success):
    - exclusion: the log alternates enter/exit of one call at a time;
    - serial commit: replaying calls in enter order through `SYNC_MODEL`, each call is given the
-     value the previous ones committed; a pure call that ran committed (its function and write
-     are one step); an effectful call whose function and fiber succeeded committed; one that
-     failed, died, or never entered did not; one interrupted after its function produced a
-     value is the one ambiguous case (accepted either way and counted with `event`);
+     value the previous ones committed; a pure call that ran committed (Ref.ts: its function
+     and write are one sync step); an effectful call whose function and fiber succeeded
+     committed; one that failed, died, or was interrupted while parked in its function did not;
+   - control-dependent: with yields prevented, nothing parks between a function's entry or
+     success and the end of its update, so a pure call that entered and an effectful call
+     whose function produced a value both exit with Success;
    - results: every successful fiber returns the model's result for the value it was given;
    - liveness and release: once every gate is open, every fiber ends, the semaphore holds no
      permit and no waiter, and a further update completes.
    `get` is unsynchronized upstream and is pinned by test_synchronized_ref_upstream.py instead.
    The functions never mutate their argument in place; no rollback of in-place mutation exists
    or is claimed.
+
+Hypothesis reports some invalid examples for both properties. Measured with hypothesis 6.170.15
+debug verbosity, every one is Status.OVERRUN: the engine's novel-prefix generation caps a
+random continuation at five times the minimal one (conjecture/engine.py generate_novel_prefix
+path, `max_length = len(prefix) + minimal_extension * 5`) and abandons draws that exceed it,
+before the test body runs. No filter or assume exists here to make constructive.
 """
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal, Never
 
-from hypothesis import event, given, settings
+from hypothesis import event, example, given, settings
 from hypothesis import strategies as st
-from peffect.ref import Ref
-from peffect.synchronized_ref import SynchronizedRef
 
 from peffect import (
     Deferred,
@@ -49,17 +62,21 @@ from peffect import (
     Failure,
     Fiber,
     Interrupt,
+    PreventSchedulerYield,
     Success,
     die,
     fail,
     fork,
     gen,
+    provide,
     run,
     succeed,
     sync,
 )
 from peffect import yield_now as yield_now_
 from peffect.option import Option, Some
+from peffect.ref import Ref
+from peffect.synchronized_ref import SynchronizedRef
 
 
 def t(s: int, k: int) -> int:
@@ -144,6 +161,7 @@ def ref_op(ref: Ref[int], name: str, k: int) -> Effect[object, Never, Never]:
             raise AssertionError(name)
 
 
+@example(initial=0, ops=[(name, 3) for name in REF_MODEL])
 @settings(max_examples=200, deadline=None)
 @given(
     st.integers(0, 7),
@@ -155,6 +173,7 @@ async def test_ref_results_and_value_follow_the_model_over_operation_sequences(
     ref = Ref[int].make_unsafe(initial)
     state = initial
     for name, k in ops:
+        event(f"operation: {name}")
         expected, state = REF_MODEL[name](state, k)
         assert await run(ref_op(ref, name, k)) == expected, (name, k)
         assert ref.get_unsafe() == state, (name, k)
@@ -224,7 +243,8 @@ def sync_op(sref: SynchronizedRef[int], call: Call, i: int, log: Log) -> Effect[
     def logged[T](eff: Effect[T, Never, Never]) -> Effect[T, Never, Never]:
         """set, get_and_set and set_and_get take no function: log them as they complete. The
         permit's release only queues the next holder's wake on the dispatcher (Semaphore.ts:
-        323-336), so no other holder runs between the write and this log."""
+        323-336), and with yields prevented nothing parks between the write and this map, so
+        no other holder runs, and no interrupt lands, between the write and this log."""
 
         def mark(result: T) -> T:
             log.events.extend([("enter", i), ("exit", i)])
@@ -322,6 +342,22 @@ def reasons(ex: Exit[object, str] | None) -> list[type]:
     return [type(r) for r in ex.cause.reasons]
 
 
+@example(
+    initial=0,
+    sequence=[call_step(name, 3, "ok", False) for name in SYNC_MODEL],
+)
+@example(
+    initial=0,
+    sequence=[
+        call_step("update_effect", 1, "ok", True),
+        call_step("update", 2, "ok", False),
+        driver_step("interrupt", 1),
+        driver_step("interrupt", 0),
+        call_step("update_effect", 3, "fail", False),
+        call_step("update_effect", 4, "die", False),
+        call_step("update_effect", 5, "ok", False),
+    ],
+)
 @settings(max_examples=200, deadline=None)
 @given(st.integers(0, 7), steps)
 async def test_synchronized_ref_serializes_and_commits_only_successful_updates(
@@ -336,6 +372,7 @@ async def test_synchronized_ref_serializes_and_commits_only_successful_updates(
         for step in sequence:
             match step:
                 case ("call", name, k, outcome, gated):
+                    event(f"operation: {name}")
                     gate = yield from Deferred[None, Never].make()
                     if not gated:
                         yield from gate.succeed(None)
@@ -368,7 +405,7 @@ async def test_synchronized_ref_serializes_and_commits_only_successful_updates(
         yield from sref.update(lambda s: s)
         return final
 
-    final = await run(program())
+    final = await run(provide(PreventSchedulerYield.context(True))(program()))
 
     # exclusion
     events = log.events
@@ -387,11 +424,14 @@ async def test_synchronized_ref_serializes_and_commits_only_successful_updates(
             s = call.seen
             assert s is not None and s in possible, (call, possible)
         result, new = SYNC_MODEL[call.name](s, call.k)
-        if call.name in PURE:  # the function and the write are one step: entered is committed
+        if call.name in PURE:
+            # Committed: Ref.ts runs the function and the write in one sync step. Success is the
+            # PreventSchedulerYield control's consequence, not entry's: the per-op sweep shows a
+            # pure call that entered can exit interrupted after its write.
             assert isinstance(ex, Success) and ex.value == result, (call.name, s, call.k, ex)
             possible = {new}
         elif isinstance(ex, Success):
-            assert call.outcome == "ok"
+            assert call.outcome == "ok" and call.produced
             assert ex.value == result, (call.name, s, call.k)
             possible = {new}
         elif call.outcome == "fail" and reasons(ex) == [Fail]:
@@ -403,12 +443,11 @@ async def test_synchronized_ref_serializes_and_commits_only_successful_updates(
             possible = {s}
         else:
             assert Interrupt in reasons(ex), (call, ex)
-            if call.produced:
-                event("interrupted after the function produced its value")
-                possible = {s, new}
-            else:
-                event("interrupted inside the function")
-                possible = {s}
+            # With yields prevented nothing parks after the function produced its value; the
+            # produced-then-interrupted outcomes are swept in test_synchronized_ref_upstream.py.
+            assert not call.produced, (call, ex)
+            event("interrupted inside the function")
+            possible = {s}
     assert final in possible
     for call in calls:
         assert call.fiber is not None and call.fiber.exit is not None, "a call never finished"

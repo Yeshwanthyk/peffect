@@ -48,7 +48,7 @@ increment, not a claim that the full runtime or its fidelity gaps are complete.
 | 2 ✓ | Clock as a Reference, TestClock | Clock.ts (333), testing/TestClock.ts | `clock.py`, `testing/` | Reference + `Async` | `sleep` under TestClock never touches the loop timer |
 | 2 | Scope | Scope.ts (573) | `scope.py` | finalizers run masked, reverse order, get the Exit | prop: every added finalizer runs once, in reverse |
 | 3 | Deferred, Latch | Deferred.ts (946), Latch.ts (394) | `deferred.py` | waiter list + `Async` | formal: waiter-list model (no lost wakeup, interrupted waiter leaves the list) |
-| 3 | Ref, SynchronizedRef | Ref.ts (765) | `ref.py` | plain cell; Sync | — |
+| 3 ✓ | Ref, SynchronizedRef | Ref.ts, SynchronizedRef.ts | `ref.py`, `synchronized_ref.py` | Sync + Semaphore | upstream ports, generated models, interrupt sweeps |
 | 3 | Semaphore | Semaphore.ts (696) | `semaphore.py` | waiter list + `Async` | prop: permits never negative, never above max, under random interrupts |
 | 3 | Queue (bounded, dropping, sliding) | Queue.ts (2,175) | `queue.py` | two waiter lists | prop: no item lost or duplicated when takers are interrupted |
 | 3 (part ✓) | `all_`, `for_each(concurrency=)` ✓, `race` ✓, `timeout` ✓, FiberSet | effect.ts | `concurrent.py` | fork + observers + Semaphore + Clock | prop: losers interrupted and awaited before the result (K8 for combinators) |

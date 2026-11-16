@@ -76,6 +76,7 @@ from peffect.latch import Latch
 from peffect.layer import CurrentMemoMap, Layer, MemoMap, provide_layer
 from peffect.managed_runtime import ManagedRuntime
 from peffect.option import Option, Some
+from peffect.ref import Ref
 from peffect.resources import acquire_release, acquire_use_release, add_finalizer
 from peffect.scheduler import MaxOpsBeforeYield, PreventSchedulerYield, Scheduler
 from peffect.scope import (
@@ -89,6 +90,7 @@ from peffect.scope import (
     scoped,
 )
 from peffect.semaphore import Semaphore
+from peffect.synchronized_ref import SynchronizedRef
 from peffect.timeout import TimeoutError, timeout, timeout_option, timeout_or_else
 
 __all__ = [
@@ -122,6 +124,7 @@ __all__ = [
     "MixedScheduler",
     "Option",
     "PreventSchedulerYield",
+    "Ref",
     "Reference",
     "RootRunner",
     "Scheduler",
@@ -132,6 +135,7 @@ __all__ = [
     "Semaphore",
     "Some",
     "Success",
+    "SynchronizedRef",
     "Tag",
     "TimeoutError",
     "acquire_release",

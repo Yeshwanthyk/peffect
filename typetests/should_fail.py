@@ -621,3 +621,20 @@ def emission_rejects_filter_sentinels() -> None:
     log_with_level("All")
     # 120. LOG_NONE_NOT_SEVERITY: None is a minimum filter, not an emitted severity
     log_with_level("None")
+
+
+def ref_type_mistakes() -> None:
+    from peffect import Ref, SynchronizedRef
+
+    # 121. REF_INVARIANCE
+    _ref_widened: Ref[object] = Ref[int].make_unsafe(1)
+    # 122. SYNC_REF_INVARIANCE
+    _sync_widened: SynchronizedRef[object] = SynchronizedRef[int].make_unsafe(1)
+    # 123. REF_BARE_UNSAFE
+    _bare_ref = Ref.make_unsafe(1)
+    # 124. REF_BARE_MAKE
+    _bare_ref_effect = Ref.make(1)
+    # 125. SYNC_REF_BARE_UNSAFE
+    _bare_sync = SynchronizedRef.make_unsafe(1)
+    # 126. SYNC_REF_BARE_MAKE
+    _bare_sync_effect = SynchronizedRef.make(1)

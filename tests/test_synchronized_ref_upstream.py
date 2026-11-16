@@ -25,7 +25,6 @@ from enum import Enum
 from typing import Any, Literal, Never
 
 import pytest
-from peffect.synchronized_ref import SynchronizedRef
 
 from peffect import (
     Cause,
@@ -45,11 +44,14 @@ from peffect import (
     gen,
     provide,
     run,
+    run_fork,
     succeed,
 )
 from peffect import yield_now as yield_now_
+from peffect.fiber import Task
 from peffect.option import Option, Some
 from peffect.scheduler import MixedScheduler, Scheduler, SchedulerDispatcher
+from peffect.synchronized_ref import SynchronizedRef
 
 current = "value"
 update = "new value"
@@ -329,40 +331,86 @@ async def test_interrupting_a_parked_update_writes_nothing_and_admits_the_next_c
     await bounded(program())
 
 
-async def test_an_interrupt_at_any_operation_leaves_the_old_or_the_new_value():
-    """The write is the continuation of `f`'s success inside withPermit; interrupting the
-    updating fiber at each scheduler operation (Semaphore.test.ts:382's technique) leaves
-    either the old value or the new one, never another, and always returns the permit. Both
-    outcomes must occur, so the sweep reaches both sides of the write."""
+def produce(ran: list[bool], n: int) -> int:
+    ran[0] = True
+    return n + 1
 
-    def body(sref: SynchronizedRef[int]) -> Effect[int, Never, Never]:
-        return sref.update_and_get_effect(lambda n: yield_now_.map(lambda _: n + 1))
+
+type Swept = Callable[[SynchronizedRef[int], list[bool]], Effect[object, Never, Never]]
+type Outcome = tuple[str, bool, int]  # (exit, the function produced or ran, final value)
+
+# One write after a map, one after a flatMap, one Ref op under the permit, and one with no
+# function. Each set is every outcome the source allows for 0 -> 1, so equality says both that
+# nothing else happens and that the sweep reaches each allowed one.
+SWEPT: list[tuple[str, Swept, set[Outcome]]] = [
+    (
+        "update_and_get_effect",
+        lambda r, ran: r.update_and_get_effect(lambda n: yield_now_.map(lambda _: produce(ran, n))),
+        {("interrupt", False, 0), ("interrupt", True, 0), ("interrupt", True, 1), ("ok", True, 1)},
+    ),
+    (
+        "update_some_and_get_effect",
+        lambda r, ran: r.update_some_and_get_effect(
+            lambda n: yield_now_.map(lambda _: Some(produce(ran, n)))
+        ),
+        {("interrupt", False, 0), ("interrupt", True, 0), ("interrupt", True, 1), ("ok", True, 1)},
+    ),
+    (
+        "update",
+        lambda r, ran: r.update(lambda n: produce(ran, n)),
+        {("interrupt", False, 0), ("interrupt", True, 1), ("ok", True, 1)},
+    ),
+    (
+        "set",
+        lambda r, _: r.set(1),
+        {("interrupt", False, 0), ("interrupt", False, 1), ("ok", False, 1)},
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("op", "allowed"), [(op, allowed) for _, op, allowed in SWEPT], ids=[n for n, _, _ in SWEPT]
+)
+async def test_an_interrupt_at_any_operation_leaves_the_old_or_the_new_value(
+    op: Swept, allowed: set[Outcome]
+):
+    """The write is the continuation of `f`'s success inside withPermit (pure updates: Ref.ts
+    computes and assigns in one sync step); interrupting the updating fiber at each scheduler
+    operation (Semaphore.test.ts:382's technique), and once past the last, leaves the old or the
+    new value and always returns the permit. Measured consequences the oracles elsewhere rely
+    on: an effectful update interrupted after its function produced a value may or may not have
+    written it, and a pure update or a set may exit interrupted after its write."""
 
     @gen
     def program():
         operations = [0]
         counted = CountingScheduler(lambda _: operations.__setitem__(0, operations[0] + 1))
         baseline = SynchronizedRef[int].make_unsafe(0)
-        fiber = yield from fork(on(counted, body(baseline)))
+        fiber = yield from fork(on(counted, op(baseline, [False])))
         yield from fiber.await_()
         assert operations[0] > 0 and baseline.get_unsafe() == 1
 
-        values: set[int] = set()
-        for at in range(1, operations[0] + 1):
+        outcomes: set[Outcome] = set()
+        for at in range(1, operations[0] + 2):
             sref = SynchronizedRef[int].make_unsafe(0)
-            seen = [0]
+            ran, seen = [False], [0]
 
             def interrupt_at(fiber: Any, at: int = at, seen: list[int] = seen) -> None:
                 seen[0] += 1
                 if seen[0] == at:
                     fiber.interrupt_unsafe()
 
-            target = yield from fork(on(CountingScheduler(interrupt_at), body(sref)))
+            target = yield from fork(on(CountingScheduler(interrupt_at), op(sref, ran)))
             yield from target.await_()
-            values.add(sref.get_unsafe())
+            ex = target.exit
+            exit_kind = (
+                "ok" if isinstance(ex, Success) else "interrupt" if has_interrupts(ex) else repr(ex)
+            )
+            value = sref.get_unsafe()
+            outcomes.add((exit_kind, ran[0], value))
             assert released(sref)
-            assert (yield from sref.update_and_get(lambda n: n + 1)) in (1, 2)
-        assert values == {0, 1}
+            assert (yield from sref.update_and_get(lambda n: n + 1)) == value + 1
+        assert outcomes == allowed
 
     await bounded(program())
 
@@ -458,29 +506,25 @@ async def test_queued_updates_run_in_arrival_order():
     await bounded(program())
 
 
-async def test_an_update_that_calls_its_own_ref_parks_until_interrupted():
+def test_an_update_that_calls_its_own_ref_parks_until_interrupted():
     """Regression for a documented hazard: the semaphore is not reentrant, so a function that
-    calls a synchronized operation on its own ref waits for the permit its caller holds. It
-    stays parked (bounded by turns, not time); interrupting it writes nothing and frees the
-    permit."""
-
-    @gen
-    def program():
-        sref = yield from SynchronizedRef[int].make(0)
-        fiber = yield from fork(
-            sref.update_effect(lambda n: sref.set(n + 5).map(lambda _: n + 1)),
-            start_immediately=True,
-        )
-        for _ in range(8):
-            yield from yield_now_
-        assert fiber.exit is None
-        assert sref.semaphore.taken == 1 and len(sref.semaphore.waiters) == 1
-        yield from fiber.interrupt()
-        assert has_interrupts(fiber.exit)
-        assert sref.get_unsafe() == 0
-        assert released(sref)
-
-    await bounded(program())
+    calls a synchronized operation on its own ref waits for the permit its caller holds. On a
+    manual scheduler the world reaches quiescence (no armed work anywhere) with the update
+    still pending, holding the permit and queued behind itself: parked, not slow. Interrupting
+    it writes nothing and frees the permit; cleanup is bounded by drain's step limit."""
+    m = Manual()
+    sref = SynchronizedRef[int].make_unsafe(0)
+    fiber = run_fork(
+        sref.update_effect(lambda n: sref.set(n + 5).map(lambda _: n + 1)), scheduler=m.scheduler
+    )
+    assert m.drain()
+    assert fiber.exit is None
+    assert sref.semaphore.taken == 1 and len(sref.semaphore.waiters) == 1
+    stopper = run_fork(fiber.interrupt(), scheduler=m.scheduler)
+    assert m.drain()
+    assert has_interrupts(fiber.exit) and isinstance(stopper.exit, Success)
+    assert sref.get_unsafe() == 0
+    assert released(sref)
 
 
 async def test_partial_effectful_updates_return_their_source_defined_values():
@@ -527,6 +571,27 @@ async def test_partial_effectful_updates_return_their_source_defined_values():
 
 def on[A, E, R](scheduler: Any, eff: Effect[A, E, R]) -> Effect[A, E, R]:
     return provide(Scheduler.context(scheduler))(eff)
+
+
+class Manual:
+    """test_managed_runtime_interleavings.py: a scheduler whose armed batches run only when
+    stepped, so "nothing armed" is exact quiescence in this closed world."""
+
+    def __init__(self) -> None:
+        self.pending: list[Task] = []
+        self.scheduler = MixedScheduler("async", self._arm)
+
+    def _arm(self, batch: Task) -> Task:
+        self.pending.append(batch)
+        return lambda: self.pending.remove(batch) if batch in self.pending else None
+
+    def drain(self, limit: int = 20_000) -> bool:
+        """Run batches until none is armed; True when the world is quiescent."""
+        for _ in range(limit):
+            if not self.pending:
+                return True
+            self.pending.pop(0)()
+        return not self.pending
 
 
 class CountingScheduler:

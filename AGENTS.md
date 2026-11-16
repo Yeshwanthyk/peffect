@@ -96,3 +96,11 @@ Rows TC1–TC6, CO1, LG1, FS1 in `docs/INVARIANTS.md`; lesson `docs/lessons/06-t
   `# N. NAME` block in `typetests/should_fail.py`; `tests/test_types.py` checks both.
 - Each roadmap tier ships a lesson in `docs/lessons/`, its rows in `docs/INVARIANTS.md`, and a
   section here with the idiom and the mistakes it prevents.
+
+## Mutable state
+
+Use `Ref[int].make(0)` for synchronous cell updates and `SynchronizedRef[int].make(0)`
+when an update runs effects. Synchronized writes serialize; `get()` remains unlocked.
+Do not run a synchronized write inside another write on the same cell: the permit is not
+reentrant. An interrupted update may already have committed; cancellation does not imply
+rollback. Use immutable replacement values when rollback of callback-side mutation matters.

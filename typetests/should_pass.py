@@ -695,3 +695,38 @@ def testclock_module_types() -> None:
     assert_type(TestClock.set_time(1.5), Effect[None, Never, Never])
     assert_type(TestClock.with_live(race_left()), Effect[int, RaceErrA, RaceA])
     assert_type(TestClock.test_clock_with(lambda _: race_left()), Effect[int, RaceErrA, RaceA])
+
+
+def ref_type_contracts() -> None:
+    from peffect import Ref, SynchronizedRef
+    from peffect.option import Option, Some
+
+    ref = Ref[int | None].make_unsafe(1)
+    assert_type(ref, Ref[int | None])
+    assert_type(Ref[int | None].make(None), Effect[Ref[int | None], Never, Never])
+    ref.set(None)
+    ref.update_some(lambda _: Some(None))
+    sref = SynchronizedRef[int | None].make_unsafe(None)
+    assert_type(sref, SynchronizedRef[int | None])
+    assert_type(
+        SynchronizedRef[int | None].make(1), Effect[SynchronizedRef[int | None], Never, Never]
+    )
+
+    # Declared error and environment channels must survive each effectful method.
+    def checked(
+        eff: Effect[int, str, Users],
+        opt: Effect[Option[int], str, Users],
+        pair: Effect[tuple[str, int], str, Users],
+        partial: Effect[tuple[str, Option[int]], str, Users],
+    ) -> None:
+        r = SynchronizedRef[int].make_unsafe(1)
+        assert_type(r.get_and_update_effect(lambda _: eff), Effect[int, str, Users])
+        assert_type(r.get_and_update_some_effect(lambda _: opt), Effect[int, str, Users])
+        assert_type(r.modify_effect(lambda _: pair), Effect[str, str, Users])
+        assert_type(r.modify_some_effect(lambda _: partial), Effect[str, str, Users])
+        assert_type(r.update_effect(lambda _: eff), Effect[None, str, Users])
+        assert_type(r.update_and_get_effect(lambda _: eff), Effect[int, str, Users])
+        assert_type(r.update_some_effect(lambda _: opt), Effect[None, str, Users])
+        assert_type(r.update_some_and_get_effect(lambda _: opt), Effect[int, str, Users])
+
+    assert callable(checked)
