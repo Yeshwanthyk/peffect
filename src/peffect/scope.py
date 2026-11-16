@@ -357,6 +357,21 @@ scope: Effect[ScopeService, Never, Scope] = Scope().use()
 """Effect.scope: the Scope service in context (internal/effect.ts:4192)."""
 
 
+def fork_scoped[A, E, R](
+    eff: Effect[A, E, R],
+    *,
+    start_immediately: bool = False,
+    uninterruptible: bool | Literal["inherit"] = False,
+) -> Effect[Fiber[A, E], Never, R | Scope]:
+    """Effect.forkScoped: ``fork_in`` the Scope in context (internal/effect.ts:5742-5765). The
+    fiber outlives the fiber that forked it and is interrupted when that Scope closes."""
+    return scope.flat_map(
+        lambda s: fork_in(
+            eff, s, start_immediately=start_immediately, uninterruptible=uninterruptible
+        )
+    )
+
+
 # exact match first, as context.provide: matching `Scope | R` against `Scope` leaves R unsolved
 @overload
 def scoped[A, E](eff: Effect[A, E, Scope]) -> Effect[A, E, Never]: ...

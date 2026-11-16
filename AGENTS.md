@@ -68,6 +68,26 @@ needs the `ClockService` members, and its `sleep` receives a `Duration` (`peffec
 bare number of **milliseconds** (`sleep(10)` is 10 ms, not 10 s). Rows CL1–CL5 in
 `docs/INVARIANTS.md`.
 
+## Testing time, output and scoped fibers (TestClock, TestConsole, fork_scoped)
+
+Provide `TestClock.layer()` and drive time with `TestClock.adjust` / `TestClock.set_time`; a
+`sleep` under it never touches the loop timer. Fork the sleeping work first, then adjust:
+`adjust` waits for the woken fibers to settle, bounded by the busy-warning timeout. Assert right after it, with no
+`yield_now` or `asyncio.sleep` to "let things run". Use `TestClock.with_live(eff)` for a real
+wait inside a test. Capture output with `TestConsole.layer` and read `TestConsole.log_lines`.
+Log through `log_warning` / `log_with_level(level)`, which add nothing to R.
+
+Mistakes this prevents:
+- Adding `yield_now` or live sleeps after `adjust` to "let fibers run": `adjust` is the settle
+  point (a barrier before it, wake tracking after), and fixed yields hide ordering bugs.
+- A test that waits on a TestClock sleep without adjusting: the clock prints a warning to the
+  live console after `warning_delay`; it is not a hang to work around with live sleeps.
+- `TestClock.make()` needs a Scope (it stops its warning on close); the layer provides one.
+- `fork_scoped` adds `Scope` to R and ties the fiber to that scope, not to its parent; use it
+  for a background fiber that must outlive the forking fiber but not the scope.
+- A Logger listed twice in `CurrentLoggers` logs once; levels are upstream's names (`"Warn"`).
+Rows TC1–TC6, CO1, LG1, FS1 in `docs/INVARIANTS.md`; lesson `docs/lessons/06-testclock.html`.
+
 ## Conventions
 
 - Leave `@gen` bodies unannotated so pyright infers `Effect[A, E, R]` from the yields; ruff's

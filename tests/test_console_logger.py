@@ -34,7 +34,7 @@ Scope and adaptations:
 
 import os
 import time
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any, Never
 
@@ -117,7 +117,7 @@ class FixedClock:
 
 
 @contextmanager
-def local_timezone(name: str) -> Iterator[None]:
+def local_timezone(name: str) -> Generator[None]:
     """Run with ``TZ=name``; the header is local time, as upstream's `Date#getHours`."""
     saved = os.environ.get("TZ")
     os.environ["TZ"] = name
@@ -292,10 +292,10 @@ async def test_log_to_stderr_routes_the_default_logger_to_console_error() -> Non
 
 # -- minimum level ----------------------------------------------------------------------------
 
-LEVELS = ["Trace", "Debug", "Info", "Warn", "Error", "Fatal"]
+LEVELS: list[Logger.Severity] = ["Trace", "Debug", "Info", "Warn", "Error", "Fatal"]
 
 # minimum -> levels that log; measured under bun with each MinimumLogLevel provided
-MINIMUM_CASES: list[tuple[str, list[str]]] = [
+MINIMUM_CASES: list[tuple[Logger.LogLevel, list[Logger.Severity]]] = [
     ("All", LEVELS),
     ("Trace", LEVELS),
     ("Debug", ["Debug", "Info", "Warn", "Error", "Fatal"]),
@@ -391,3 +391,23 @@ async def test_the_default_loggers_are_the_default_logger(
     await run(Logger.log_warning("live"))
     out = capsys.readouterr().out
     assert " WARN (#" in out and out.endswith(": live\n")
+
+
+@pytest.mark.asyncio
+async def test_no_loggers_does_not_read_clock() -> None:
+    """Source: internal/effect.ts:6752 skips time reads when the logger set is empty."""
+
+    class CountingClock(FixedClock):
+        reads = 0
+
+        def current_time_millis_unsafe(self) -> float:
+            self.reads += 1
+            return super().current_time_millis_unsafe()
+
+    clock = CountingClock(0)
+    await run(
+        provide(Clock.context(clock) | Logger.CurrentLoggers.context(()))(
+            Logger.log_warning("disabled")
+        )
+    )
+    assert clock.reads == 0

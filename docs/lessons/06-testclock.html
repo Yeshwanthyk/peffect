@@ -1,0 +1,35 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+:root{color-scheme:light dark}
+body{font-family:var(--font-sans);margin:0}
+.wrap{display:grid;gap:12px}
+h3{margin:4px 0;font-size:15px}
+.txt{font-size:13.5px;line-height:1.5}
+.steps{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.box{border:1px solid var(--border);border-radius:var(--radius);padding:8px 10px;font-size:12.5px;line-height:1.45}
+.box h4{margin:0 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted-foreground)}
+.k{border-color:var(--chart-1)}
+code{font-family:var(--font-mono);font-size:11.5px;background:var(--code-background);padding:0 3px;border-radius:3px}
+table{border-collapse:collapse;width:100%;font-size:12px}
+th,td{border:1px solid var(--border);padding:4px 6px;text-align:left;vertical-align:top}
+td.r{color:var(--destructive)} td.g{color:var(--success)}
+</style></head><body><div class="wrap">
+<h3>Lesson 6: TestClock — time moves only when the test says, and adjust waits for the fallout</h3>
+<div class="txt"><code>TestClock.layer()</code> provides a Clock whose <code>sleep</code> parks the fiber on a latch keyed by a deadline, and a Scheduler that counts the work a wake causes. <code>adjust(d)</code> moves the clock past due deadlines one at a time and waits until the work those wakes scheduled has run, or the busy-warning timeout expires, so the test asserts straight after it, with no extra yields.</div>
+<div class="steps">
+ <div class="box"><h4>1 · sleep(d)</h4>Insert <code>(now + d, latch)</code> into a descending list, before equal deadlines (first sleeper wakes first). Start the one-per-clock warning fiber, then wait on the latch. Interrupted: the entry is removed.</div>
+ <div class="box k"><h4>2 · adjust: barrier</h4>Under the run semaphore, fork <code>yield_now</code> and await it, so fibers already scheduled get to register their sleeps first. Stop the warning.</div>
+ <div class="box k"><h4>3 · adjust: wake each due sleep</h4>Pop the earliest due entry, advance the clock to its deadline (monotonic rounds half up, wall floors), open its latch with tracking on. Every task the wake schedules is counted.</div>
+ <div class="box"><h4>4 · settle</h4>Count zero: yield once. Otherwise wait for the count to drain; if it doesn't within <code>warning_delay</code> of live time, print the busy warning on the live console. Then advance to the end time.</div>
+</div>
+<table>
+<tr><th>situation</th><th>what happens</th><th>pinned by</th></tr>
+<tr><td class="g">fork a sleeper, <code>adjust("1 minute")</code></td><td>sleeper finished when adjust returns</td><td><code>test_sleep_delays_effects_until_time_is_adjusted</code></td></tr>
+<tr><td>woken fiber spins on <code>yield_now</code></td><td>busy warning after <code>warning_delay</code>, on the live console</td><td><code>test_warnings_bypass_test_console</code></td></tr>
+<tr><td>test sleeps but never adjusts</td><td>"not advancing" warning, once per clock, from the first sleeper's child fiber</td><td>S10, S11, S13, S14</td></tr>
+<tr><td>a tracked task raises</td><td>count still drops (<code>finally</code>), tracking restored, adjust completes</td><td>S12</td></tr>
+<tr><td class="r">mutant: drop the trailing yield after settle</td><td>survives the current suite; equivalence is unproven, so the upstream yield is retained</td><td>—</td></tr>
+</table>
+<div class="txt"><b>Why the warnings go to the live clock and console.</b> A test that forgot to adjust would never see a warning timed by the TestClock, and a TestConsole would swallow it. So both warnings use <code>with_live</code> and the Console captured when the clock was made.<br>
+<b>Python adaptations.</b> <code>current_time_millis</code> is a float (a TestClock can stand at 0.0015 ms). The <code>TestClock</code> and <code>TestConsole</code> namespaces are instances, not classes, so pytest does not collect them as test classes. <code>test_clock_with</code> on a live clock is a TypeError defect where upstream casts.<br>
+<b>How we know it holds.</b> All 25 TestClock.test.ts cases and S1–S14 in <code>tests/test_testclock.py</code>, plus a production mutation run over the TestClock, logger, console and <code>fork_scoped</code> sources. Rows TC1–TC6 in <code>docs/INVARIANTS.md</code>.</div>
+</div></body></html>

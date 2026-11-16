@@ -25,13 +25,14 @@ REANCHOR_THRESHOLD_NANOS = 1_000_000_000  # wall time re-anchors when it drifts 
 
 
 class ClockService(Protocol):
-    """What a Clock provides (Clock.ts:53-150). Times are int: milliseconds, or nanoseconds."""
+    """What a Clock provides (Clock.ts:53-150). Milliseconds are a float, as upstream's
+    `number` (a TestClock can stand at 0.0015 or at infinity); nanoseconds an int (`bigint`)."""
 
-    def current_time_millis_unsafe(self) -> int: ...
+    def current_time_millis_unsafe(self) -> float: ...
     def current_time_nanos_unsafe(self) -> int: ...
     def monotonic_time_nanos_unsafe(self) -> int: ...
     @property
-    def current_time_millis(self) -> Effect[int, Never, Never]: ...
+    def current_time_millis(self) -> Effect[float, Never, Never]: ...
     @property
     def current_time_nanos(self) -> Effect[int, Never, Never]: ...
     @property
@@ -63,7 +64,7 @@ def _wall_nanos() -> int:
 class _LiveClock:
     __slots__ = ()
 
-    def current_time_millis_unsafe(self) -> int:
+    def current_time_millis_unsafe(self) -> float:
         return _wall_millis()
 
     def current_time_nanos_unsafe(self) -> int:
@@ -73,7 +74,7 @@ class _LiveClock:
         return time.monotonic_ns()
 
     @property
-    def current_time_millis(self) -> Effect[int, Never, Never]:
+    def current_time_millis(self) -> Effect[float, Never, Never]:
         return sync(self.current_time_millis_unsafe)
 
     @property
@@ -116,7 +117,7 @@ def clock_with[A, E, R](f: Callable[[ClockService], Effect[A, E, R]]) -> Effect[
     return Clock().use().flat_map(f)
 
 
-current_time_millis: Effect[int, Never, Never] = clock_with(lambda c: c.current_time_millis)
+current_time_millis: Effect[float, Never, Never] = clock_with(lambda c: c.current_time_millis)
 current_time_nanos: Effect[int, Never, Never] = clock_with(lambda c: c.current_time_nanos)
 monotonic_time_nanos: Effect[int, Never, Never] = clock_with(lambda c: c.monotonic_time_nanos)
 

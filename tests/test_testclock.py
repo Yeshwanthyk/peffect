@@ -26,9 +26,11 @@ Adaptations used throughout:
   so pytest's `capsys` is the spy.
 """
 
+import asyncio
 import copy
 import math
-from typing import Any, Never
+from collections.abc import Callable
+from typing import Any, Literal, Never
 
 import pytest
 
@@ -39,8 +41,12 @@ from peffect import (
     Effect,
     Exit,
     Failure,
+    Fiber,
     Layer,
     MaxOpsBeforeYield,
+    MixedScheduler,
+    Scheduler,
+    SchedulerDispatcher,
     Success,
     ensuring,
     fork,
@@ -57,6 +63,8 @@ from peffect import (
     succeed,
     sync,
     timeout,
+    uninterruptible,
+    with_dispatcher,
     yield_now,
 )
 from peffect.testing import TestClock, TestClockService, TestConsole
@@ -671,10 +679,46 @@ async def test_source_s11_the_warning_belongs_to_the_first_sleeping_fiber(
     assert await count_warnings(capsys, body()) == 0
 
 
+async def test_source_s13_the_warning_fiber_is_interruptible_under_a_masked_sleeper(
+    capsys: pytest.CaptureFixture[str],
+):
+    """S13, `warningStart`'s `forkChild` starts the warning fiber interruptible even when the
+    sleeper is uninterruptible, so `adjust`'s `warningDone` stops it at once (measured upstream:
+    adjust returns in 3ms, 0 warnings; mutant `warning_inherits_mask`)."""
+
+    @gen
+    def body():
+        c = yield from TestClock.make(warning_delay="50 millis")
+        yield from fork_daemon(uninterruptible(c.sleep(D.seconds(1))))
+        yield from yield_now
+        yield from c.adjust(D.seconds(1))
+
+    assert await count_warnings(capsys, body()) == 0
+
+
+async def test_source_s14_set_time_stops_the_warning_while_the_sleeper_still_waits(
+    capsys: pytest.CaptureFixture[str],
+):
+    """S14, `setTime` starts with `warningDone`: setting a time before the deadline leaves the
+    sleeper waiting but stops its warning (measured upstream: 0 warnings; mutant
+    `set_time_no_warning_done`)."""
+
+    @gen
+    def body():
+        c = yield from TestClock.make(warning_delay="50 millis")
+        yield from fork_daemon(c.sleep(D.seconds(1)))
+        yield from yield_now
+        yield from c.set_time(500)
+        yield from sleep("150 millis")
+
+    assert await count_warnings(capsys, body()) == 0
+
+
 # (set_time on a fresh clock, wall nanos, monotonic nanos): measured under bun
 ROUNDING_CASES: list[tuple[float, int, int]] = [
     (0.0000025, 2, 3),
     (0.0000005, 0, 1),
+    (0.0000007, 0, 1),  # wall floors 0.7 ns; rounding would give 1 (mutant `wall_round`)
     (1.5, 1_500_000, 1_500_000),
 ]
 
@@ -756,3 +800,95 @@ async def test_source_s9_each_run_gets_a_fresh_clock():
     await it_effect(body())
     await it_effect(body())
     assert seen == [1000, 1000]
+
+
+class RecordingScheduler:
+    """The default MixedScheduler, recording every task its dispatchers are given: the parent
+    a TestClock layer's tracking scheduler wraps."""
+
+    def __init__(self) -> None:
+        self.inner = MixedScheduler()
+        self.tasks: list[Callable[[], None]] = []
+
+    @property
+    def execution_mode(self) -> Literal["sync", "async"]:
+        return self.inner.execution_mode
+
+    def should_yield(self, fiber: Fiber[Any, Any]) -> bool:
+        return self.inner.should_yield(fiber)
+
+    def make_dispatcher(self) -> SchedulerDispatcher:
+        inner, tasks = self.inner.make_dispatcher(), self.tasks
+
+        class Recording:
+            def schedule_task(self, task: Callable[[], None], priority: int) -> None:
+                tasks.append(task)
+                inner.schedule_task(task, priority)
+
+            def flush(self) -> None:
+                inner.flush()
+
+        return Recording()
+
+
+async def test_source_s12_a_raising_tracked_task_still_settles_the_wake_and_restores_tracking():
+    """S12, TrackingScheduler `scheduleTask`'s `try runTracked(...) finally --pending` and
+    `runTracked`'s `finally currentTracker = previous`.
+
+    The woken fiber schedules a task that raises, through its real dispatcher. The raise reaches
+    the event loop's exception handler (the dispatcher does not catch it). With no busy timeout
+    (`warning_delay` infinite), `adjust` returns only if the raising task still counted down to
+    idle. A task scheduled after that, outside any wake, must reach the parent dispatcher as
+    itself, not wrapped by the wake's tracker."""
+    loop = asyncio.get_running_loop()
+    raised: list[object] = []
+    loop.set_exception_handler(lambda _loop, context: raised.append(context.get("exception")))
+    boom = RuntimeError("boom")
+
+    def raise_boom() -> None:
+        raise boom
+
+    def later() -> None:
+        pass
+
+    def schedule(task: Callable[[], None]) -> Effect[None, Never, Never]:
+        return with_dispatcher(lambda d: sync(lambda: d.schedule_task(task, 0)))
+
+    parent = RecordingScheduler()
+
+    @gen
+    def body():
+        yield from fork(sleep("1 second").flat_map(lambda _: schedule(raise_boom)))
+        yield from TestClock.adjust("1 second")
+        assert raise_boom not in parent.tasks  # it went through the tracker's wrapper
+        yield from schedule(later)
+        assert parent.tasks[-1] is later
+        yield from yield_now
+
+    layer = TestClock.layer(warning_delay=D.infinity)
+    program = provide(Scheduler.context(parent))(provide_layer(layer)(body()))
+    try:
+        await asyncio.wait_for(run(program), 5)
+    finally:
+        loop.set_exception_handler(None)
+    assert raised == [boom]
+
+
+@pytest.mark.asyncio
+async def test_nan_set_time_wakes_pending_sleep() -> None:
+    """Source: TestClock.ts:478 breaks on >, including unordered NaN deadlines."""
+
+    @gen
+    def body():
+        clock = yield from TestClock.make()
+        fiber = yield from fork(clock.sleep(D.seconds(1)), start_immediately=True)
+        yield from clock.set_time(float("nan"))
+        result = (
+            fiber.exit is not None,
+            clock.current_time_nanos_unsafe(),
+            clock.monotonic_time_nanos_unsafe(),
+        )
+        yield from fiber.interrupt()
+        return result
+
+    assert await run(scoped(body())) == (True, 1_000_000_000, 1_000_000_000)
