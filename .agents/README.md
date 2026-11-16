@@ -6,7 +6,8 @@ dependencies and installed tools are not preserved by its workspace snapshot.
 The script targets Scotty's Debian image (passwordless sudo or root) and existing
 macOS development hosts. It installs missing Debian prerequisites, uv 0.11.10,
 Bun 1.3.13, managed Python 3.13, and dependencies from `uv.lock` and the parity
-`bun.lock`. Python patch releases and Debian packages follow their repositories;
+`bun.lock`. The development lock includes Harrow 0.4.1 for the complexity gate;
+no global Harrow installation is required. Python patch releases and Debian packages follow their repositories;
 this is a repeatable setup, not a hermetic image. macOS requires git, curl, unzip,
 Node and Java already installed. Formal verification requires Java 11 or newer;
 Debian setup installs Java 17 when missing.

@@ -32,7 +32,19 @@ Why the model's pass still means something with them added (an argument, not a c
 nor holds back an interrupt, and the model's "the interrupt unwinds to the top" still describes
 the code.
 
-**Sync:** 2026-11-16, approved race/traversal refactor: no model change. `race_all` and
+**Sync:** 2026-11-16, approved maintainability cleanup: no model change. Traversal now derives
+admission from index exhaustion, cancellation and its failure accumulator instead of a separate
+`done` cell and success-as-cancellation sentinel. These invocation-local values are not modeled
+protocol fields; workers still use `_start`, `Async` and synchronous observers. No write to
+`_deferred`, `_parked`, `Park.done`, `_exit`, `children` or masking changed. Main: TLC 1.7.4,
+2232 states, depth 21, all rules hold; 24 linked tests pass. All seven `Break_*.cfg` exit 1.
+An isolated `_done` no-wait break leaves TLC green but makes three linked runtime tests fail
+through `run.sh`; production source hashes are unchanged by mutations. Fresh real vendored
+EffectJS traversal probes compare input-order results, synchronous settlement and ordered
+failure/cancellation cleanup; they are finite runtime evidence, not modeled properties.
+Commands, raw paired events and sensitivity logs: `untangle-log.md`, full-source cleanup section.
+
+Previous Sync, 2026-11-16, approved race/traversal refactor: no model change. `race_all` and
 `race_all_first` now own their algorithms; `_racing`, `_fork_racer` and `_interrupt_losers`
 share their unchanged Async/observer/OnExit lifecycle. Traversal separates ready-Exit stepping
 from `_run_window`, whose parent and resume are required, and separates record/pump/finish.

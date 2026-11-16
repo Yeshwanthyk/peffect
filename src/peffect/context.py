@@ -9,7 +9,6 @@ Effect v4: Context.ts (Service, Reference), internal/effect.ts:2379-2397 (provid
 
 from __future__ import annotations
 
-import math
 from collections.abc import Callable, Generator, Mapping
 from types import MappingProxyType
 from typing import Any, ClassVar, Generic, Never, Self, TypeVar, cast, final, overload
@@ -121,12 +120,9 @@ def _equal_values(left: Any, right: Any, path: set[tuple[int, int]]) -> bool:
     if left is right:
         return True
     if type(left) in (int, float) and type(right) in (int, float):
-        return bool(left == right) or (
-            isinstance(left, float)
-            and isinstance(right, float)
-            and math.isnan(left)
-            and math.isnan(right)
-        )
+        # Only exact builtin numbers reach this arm: self-inequality means NaN,
+        # without invoking a service object's custom equality/inequality protocol.
+        return bool(left == right) or (left != left and right != right)
     if type(left) is not type(right):
         return False
     pair = (id(left), id(right))
