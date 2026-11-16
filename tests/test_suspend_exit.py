@@ -156,19 +156,19 @@ def test_reentrant_interrupt_during_removal_still_delivers_to_the_first_consumer
     Later interruption of the continuation is allowed; removal is not rollback.
     """
     from peffect import suspend_exit
+    from peffect.core import WithFiber
 
     messages = deque([41])
     delivered: list[int] = []
-    current: list[Fiber[None, Never]] = []
 
-    def remove() -> Effect[int, Never, Never]:
+    def remove(current: Fiber[Any, Any]) -> Effect[int, Never, Never]:
         message = messages.popleft()
-        current[0].interrupt_unsafe(99)
+        current.interrupt_unsafe(99)
         return Success(message)
 
     scheduler = OperationScheduler(lambda _: False)
-    effect = suspend_exit(remove).map(delivered.append)
-    fiber = run_fork(effect, scheduler=scheduler, on_fiber_start=current.append)
+    effect = WithFiber(lambda current: suspend_exit(lambda: remove(current)).map(delivered.append))
+    fiber = run_fork(effect, scheduler=scheduler)
     scheduler.flush()
     assert delivered + list(messages) == [41]
     assert delivered == [41]

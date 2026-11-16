@@ -504,3 +504,26 @@ with exit 2. CLI regressions cover both rules (2026-11-15 independent review cor
 Both classes are invariant. Explicit generic classmethod constructors are required by strict
 Pyright; this is not runtime validation. Some(None) is a present replacement. Evidence is
 bounded runtime/property testing, not formal verification.
+
+## Atomic delivery and Pull completion
+
+Queue's prerequisites at Effect v4 pin `289a53f7`; Queue itself is a later unit.
+
+| ID | Contract | Enforcement | Evidence |
+|---|---|---|---|
+| QP1 | A lazy thunk returning a terminal Exit delivers it to its first continuation in the same operation. A pending interrupt or budget yield cannot occur between removal and that delivery. Later interruption is allowed; this is not rollback. | Kernel `suspend_exit`, folding final Success/Failure nodes; nonterminal nodes delegate normally | `test_suspend_exit.py`: sync sensitivity control, terminal success/failure, reentrant interrupt, 16-index operation sweep, lazy reuse, async delegation, raising thunk |
+| QP2 | Done is an ordinary Fail payload with a covariant, read-only leftover. The default void value is shared; Python None represents void. It adds no Cause reason or runtime protocol. | `cause.Done`, `is_done`; `pull.done` | `test_pull_upstream.py`; positive and negative prerequisite type fixtures |
+| QP3 | A completion filter succeeds with the first Done only when no non-Done failure/defect exists. Interrupt reasons alone do not prevent completion. Mixed real failures retain their order and interrupts, with every Done stripped. Without Done, the original Cause is retained. | `pull.filter_done`, `done_exit_from_cause`, `catch_done` | Six Pull.test.ts ports plus mixed-reason, first-None, handler-failure and actual-interruption cases |
+| QP4 | Handling Done removes it from the error channel while preserving ordinary errors, handler errors and both environments. Filters retain the leftover type. | Exact-Done-first overloads, shared environment type variable, bottom-channel overloads | `queue_prerequisite_type_contracts`; should_fail 127-133 |
+
+Python uses Exit as the filter's data carrier because Result is not ported. No Pull wrapper
+is introduced. Only the completion prefix is implemented; the remaining Pull operators are
+deferred to the Stream lane. `catch_tag(Done, ...)` does not implement QP3: it may recover a
+Done while discarding an ordinary typed failure merged with it.
+
+The formal kernel model abstracts ordinary computation and continuation values. It does not
+model QP1's message ownership, Done payloads or completion filtering. `suspend_exit` delegates
+to existing Success/Failure evaluation and introduces no independent write to the protocol
+fields. Protocol reruns and break sensitivity accompany runtime checks; a TLC pass is not a
+proof of Queue no-loss behavior. The reentrant test captures its fiber with WithFiber:
+`on_fiber_start` observes only a fiber still live after its initial evaluation slice.

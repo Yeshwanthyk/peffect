@@ -221,3 +221,10 @@ The 16 missing-TestClock draft tests remain deferred. ManagedRuntime's async sli
 implemented and independently reviewed: 54 focused tests pass, including integrated typing
 and boundaries. Its disposal contracts and proof limits are recorded in INVARIANTS MR1–MR9.
 This does not extend the earlier application acceptance to untested runtime scenarios.
+
+Queue prerequisite unit: `suspend_exit` folds terminal delivery into the thunk's step;
+`Done`, `done` and the genuine minimal `pull` completion API provide typed end-of-input.
+The kernel protocol and cause representation are unchanged. Invariants QP1-QP4 and the
+source-anchored tests distinguish atomic delivery from later cancellation and preserve real
+failures merged with Done. Queue strategies/lifecycle/batches and remaining Pull operators
+are still pending; this prerequisite unit does not mark Queue or Stream complete.

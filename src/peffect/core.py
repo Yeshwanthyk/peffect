@@ -516,6 +516,22 @@ class Suspend(Effect[A_co, E_co, R_co]):
 
 
 @final
+class SuspendExit(Effect[A_co, E_co, R_co]):
+    """Queue.ts:2042-2049: deliver a terminal result in the thunk's own step."""
+
+    __slots__ = ("thunk",)
+
+    def __init__(self, thunk: Callable[[], Effect[A_co, E_co, R_co]]) -> None:
+        self.thunk = thunk
+
+    def _eval(self, fiber: AnyFiber) -> AnyEffect | None:
+        effect = self.thunk()
+        if type(effect) in (Success, Failure):
+            return effect._eval(fiber)
+        return effect
+
+
+@final
 class WithFiber(Effect[A_co, E_co, R_co]):
     __slots__ = ("f",)
 
@@ -919,6 +935,17 @@ def sync[A](thunk: Callable[[], A]) -> Effect[A, Never, Never]:
 
 def suspend[A, E, R](thunk: Callable[[], Effect[A, E, R]]) -> Effect[A, E, R]:
     return Suspend(thunk)
+
+
+def suspend_exit[A, E, R](thunk: Callable[[], Effect[A, E, R]]) -> Effect[A, E, R]:
+    """Suspend lazily, delivering a returned Exit without another operation boundary.
+
+    A destructive read can remove a value and return Success(value) without an
+    intervening budget yield or pending-interrupt check losing that value before
+    its first consumer. Nonterminal effects are delegated normally. This does not
+    mask waiting or roll back work after a continuation receives the result.
+    """
+    return SuspendExit(thunk)
 
 
 def async_[A, E = Never, R = Never](register: Register[A, E, R]) -> Effect[A, E, R]:

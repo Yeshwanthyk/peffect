@@ -104,3 +104,11 @@ when an update runs effects. Synchronized writes serialize; `get()` remains unlo
 Do not run a synchronized write inside another write on the same cell: the permit is not
 reentrant. An interrupted update may already have committed; cancellation does not imply
 rollback. Use immutable replacement values when rollback of callback-side mutation matters.
+
+## Completion primitives
+
+Use `suspend_exit` when a destructive synchronous read returns an Exit that must reach its
+first consumer in the same operation; return nonterminal effects to wait normally. For
+end-of-input, use `Done` in E and `peffect.pull.catch_done`: it preserves real failures merged
+with completion. The remaining Pull surface and Queue are separate units. Contracts and
+proof limits: `docs/INVARIANTS.md`, QP1-QP4.

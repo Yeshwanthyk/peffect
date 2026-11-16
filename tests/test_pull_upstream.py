@@ -20,9 +20,8 @@ from peffect import Cause, Die, Effect, Fail, Failure, Interrupt, Success, exit_
 
 def test_filter_done_succeeds_when_done_is_the_only_failure():
     """Pull.test.ts:7."""
-    from peffect.pull import filter_done
-
     from peffect.cause import Done
+    from peffect.pull import filter_done
 
     result = filter_done(Cause.fail(Done("leftover")))
     assert isinstance(result, Success)
@@ -32,9 +31,8 @@ def test_filter_done_succeeds_when_done_is_the_only_failure():
 
 def test_filter_done_strips_done_when_merged_with_a_defect():
     """Pull.test.ts:12. A Done reason must not hide failing finalization."""
-    from peffect.pull import filter_done
-
     from peffect.cause import Done
+    from peffect.pull import filter_done
 
     result = filter_done(Cause((Fail(Done("leftover")), Die("boom"))))
     assert isinstance(result, Failure)
@@ -53,9 +51,8 @@ def test_filter_done_preserves_the_original_cause_without_done():
 
 def test_filter_done_succeeds_when_merged_only_with_interruptions():
     """Pull.test.ts:23: interrupt reason data is not a live fiber interrupt."""
-    from peffect.pull import filter_done
-
     from peffect.cause import Done
+    from peffect.pull import filter_done
 
     result = filter_done(Cause((Interrupt(1), Fail(Done("leftover")))))
     assert isinstance(result, Success)
@@ -64,9 +61,8 @@ def test_filter_done_succeeds_when_merged_only_with_interruptions():
 
 def test_done_exit_from_cause_treats_pure_done_as_success():
     """Pull.test.ts:31."""
-    from peffect.pull import done_exit_from_cause
-
     from peffect.cause import Done
+    from peffect.pull import done_exit_from_cause
 
     result = done_exit_from_cause(Cause.fail(Done("leftover")))
     assert isinstance(result, Success)
@@ -75,9 +71,8 @@ def test_done_exit_from_cause_treats_pure_done_as_success():
 
 def test_done_exit_from_cause_preserves_the_stripped_failure():
     """Pull.test.ts:36."""
-    from peffect.pull import done_exit_from_cause
-
     from peffect.cause import Done
+    from peffect.pull import done_exit_from_cause
 
     result = done_exit_from_cause(Cause((Fail(Done("leftover")), Die("boom"))))
     assert isinstance(result, Failure)
@@ -106,9 +101,8 @@ async def test_done_constructor_default_payload_and_effect_are_public():
 
 def test_done_guards_distinguish_values_reasons_and_causes():
     """Pull.ts:195-215; a Done payload in Die is not a completion failure."""
-    from peffect.pull import is_done_cause, is_done_failure
-
     from peffect.cause import Done, is_done
+    from peffect.pull import is_done_cause, is_done_failure
 
     signal = Done("left")
     assert is_done(signal)
@@ -125,9 +119,8 @@ def test_done_guards_distinguish_values_reasons_and_causes():
 @pytest.mark.parametrize("kind", ["typed", "defect", "both"])
 def test_filter_strips_all_done_reasons_and_preserves_other_reasons_in_order(kind: str):
     """Pull.ts:243-255: strip Done, preserve other failures and interruptions."""
-    from peffect.pull import done_exit_from_cause, filter_done
-
     from peffect.cause import Done
+    from peffect.pull import done_exit_from_cause, filter_done
 
     ordinary = (
         (Fail("error"),)
@@ -144,11 +137,10 @@ def test_filter_strips_all_done_reasons_and_preserves_other_reasons_in_order(kin
 
 def test_filter_uses_the_first_done_payload_even_when_it_is_none():
     """Pull.ts:248 uses the first Done object, not the first truthy payload."""
+    from peffect.cause import Done
     from peffect.pull import done_exit_from_cause, filter_done
 
-    from peffect.cause import Done
-
-    cause = Cause((Fail(Done(None)), Interrupt(1), Fail(Done("second"))))
+    cause = Cause((Fail(Done[None](None)), Interrupt(1), Fail(Done("second"))))
     filtered = filter_done(cause)
     assert isinstance(filtered, Success)
     assert filtered.value.value is None
@@ -169,9 +161,8 @@ def test_empty_and_interrupt_only_causes_are_not_normal_completion():
 
 async def test_catch_done_passes_first_leftover_to_handler_once():
     """Pull.ts:165-177 and :324-329."""
-    from peffect.pull import catch_done
-
     from peffect.cause import Done
+    from peffect.pull import catch_done
 
     seen: list[str] = []
 
@@ -187,9 +178,8 @@ async def test_catch_done_passes_first_leftover_to_handler_once():
 @pytest.mark.parametrize("kind", ["typed", "defect", "both"])
 async def test_catch_done_never_recovers_a_real_failure_merged_with_done(kind: str):
     """Pull.ts:238-256: unlike catch_tag, do not discard a second typed failure."""
-    from peffect.pull import catch_done
-
     from peffect.cause import Done
+    from peffect.pull import catch_done
 
     seen: list[str] = []
 
@@ -229,10 +219,9 @@ async def test_catch_done_passes_success_and_non_done_failure_through():
 
 
 async def test_catch_done_preserves_handler_failure_and_raising_handler_defect():
-    from peffect.pull import catch_done
-
     from peffect import fail
     from peffect.cause import Done
+    from peffect.pull import catch_done
 
     result = await run(exit_(catch_done(Failure(Cause.fail(Done("left"))), lambda _: fail(17))))
     assert isinstance(result, Failure)
@@ -248,9 +237,8 @@ async def test_catch_done_preserves_handler_failure_and_raising_handler_defect()
 
 
 def test_catch_done_does_not_catch_an_actual_interrupt_of_its_waiting_fiber():
-    from peffect.pull import catch_done
-
     from peffect import run_fork
+    from peffect.pull import catch_done
 
     seen: list[str] = []
 

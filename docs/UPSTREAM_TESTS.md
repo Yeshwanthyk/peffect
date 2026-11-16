@@ -451,3 +451,28 @@ Methods replace dual call forms. Pipeable, Inspectable and JSON inspection are n
 Ref adaptation: `set` returns Python None, following the declared void contract. The pinned
 vendor implementation returns its backing MutableRef at runtime despite declaring void;
 that incidental return value is not reproduced (also applies to SynchronizedRef.set).
+
+## Queue prerequisites: atomic delivery and Pull completion
+
+`tests/test_suspend_exit.py` derives `suspend_exit` from Queue.ts:2042-2049 and the
+interruption sweep in Queue.test.ts:517-555. Its ordinary-sync control reaches the unsafe
+removal/delivery boundary; terminal success/failure and a reentrant interruption pin the
+atomic handoff. Returned nonterminal effects delegate normally, thunks stay lazy/reusable,
+and raising thunks become defects. The 16-index sweep checks conservation at reached
+operation boundaries; it does not claim all 16 indices are reached or model full Queue.
+
+`tests/test_pull_upstream.py` ports all six Pull.test.ts cases: :7 pure Done, :12 merged
+defect, :18 no Done, :23 Done plus interruption, :31 leftover-to-Exit, :36 stripped failure.
+Source-derived additions pin Pull.ts:165-177, :195-215, :238-256, :324-329, :354-357 and
+internal/core.ts:739-767: typed failures and defects merged with Done, preservation of
+interrupt reasons, first Done including None, public constructors/guards, handler failures
+and defects, and interruption of a waiting fiber. The committed reentrant test's startup
+hook was replaced by WithFiber before implementation acceptance; assertions are unchanged.
+The mixed None/string cause spells its first constructor `Done[None](None)` so contextual
+generic inference cannot assign that payload the later string's type; assertions are unchanged.
+
+Adaptations: None is the void leftover; nominal `is_done` replaces the JS brand guard.
+`filter_done` returns Exit[Done[L], E] as data instead of the unported Result type.
+`done_exit_from_cause` returns Exit[L, E]. `catch_done` is data-first. Positive type fixtures
+pin Done exclusion and leftover types; negative blocks 127-133 pin retained channels.
+Remaining Pull operators, type utility spellings and Stream integration remain deferred.
