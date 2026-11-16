@@ -97,7 +97,8 @@ an AGENTS.md section with the idiom and the mistakes it prevents.
   and A/E/environment-free completion typetests pass; independent Sol and structural review
   passed, with 142 tests green excluding TestClock. Public `fiber_id` reads the executing fiber
   without widening B3. Broader Deferred
-  operations, Latch, concurrency and TestClock remain incomplete. Deferred is not formally modeled.
+  operations and TestClock remain incomplete. Latch and bounded traversal are now implemented.
+  Deferred is not formally modeled.
 
 - Fiber bulk prerequisite unit (2026-11-15): public `await_all` / `interrupt_all` and explicit
   `fork` / `fork_daemon(uninterruptible="inherit")`; defaults remain interruptible. Thirteen tests,
@@ -127,7 +128,7 @@ an AGENTS.md section with the idiom and the mistakes it prevents.
     `make_memo_map(_unsafe)` and `fork_memo_map(_unsafe)`.
   - 11 Layer.test.ts ports and 5 source-derived cases pass (21 test cases), along with
     typetests (should_fail 54–70) and three mutations.
-  - Not yet ported: `Layer.fresh`, suspend, recovery, tracing and ManagedRuntime.
+  - Not yet ported: `Layer.fresh`, suspend, recovery and tracing.
   - Open parity gap: Context keys are classes, not strings.
   - Not formally modeled.
 
@@ -154,7 +155,7 @@ an AGENTS.md section with the idiom and the mistakes it prevents.
 
 ## Not ported
 
-- Data modules Python already has: Array, Chunk, HashMap, HashSet, Option (`None`), Equal/Hash
+- Data modules Python already has: Array, Chunk, HashMap, HashSet, Equal/Hash
   (`__eq__`/`__hash__`), Order, Struct, Record.
 - Schema's AST, parser and JSON-schema machinery (≈33k lines): pydantic owns them.
 - Platform packages (http, sql, cluster, workflow, ai, rpc) and STM (`Tx*`). Revisit after tier 7.
@@ -195,5 +196,7 @@ and a concurrent-run regression fix it using existing APIs. Application and fixt
 are separated. See `docs/APPLICATION_PATTERN_AUDIT.md` for findings and why no new broad skill
 was added. No peffect production API was required for this application unit.
 
-The full verifier remains red on the 16 missing-TestClock draft tests. ManagedRuntime is also
-unimplemented; neither is claimed by this application acceptance.
+The 16 missing-TestClock draft tests remain deferred. ManagedRuntime's async slice is now
+implemented and independently reviewed: 54 focused tests pass, including integrated typing
+and boundaries. Its disposal contracts and proof limits are recorded in INVARIANTS MR1–MR9.
+This does not extend the earlier application acceptance to untested runtime scenarios.

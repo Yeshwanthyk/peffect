@@ -209,7 +209,7 @@ internals (B1–B3). Upstream: `Scope.ts`, `internal/effect.ts:4033-4215`. Both 
 | S5 | **A finalizer added after close runs at once with the closed Exit**; a fork of a closed scope starts Closed (:4113-4130). | `add_finalizer_exit`, `fork_unsafe` | `test_source_a_finalizer_added_after_close_runs_at_once_with_the_closed_exit`, `test_source_forking_a_closed_parent_gives_a_child_closed_with_the_parents_exit` |
 | S6 | **A child leaves its parent when it closes**, however its close ends. | `close_unsafe` removes the child key before running finalizers | the three `..._child_...` tests |
 | S7 | **`scoped` restores the context before closing.** `on_exit` sits outside `update_context`, so the restore frame pops first; a pending interrupt before install leaves only an unreachable empty scope. | `scoped` composition | `test_source_scoped_restores_the_context_before_running_finalizers` |
-| S8 | **Parallel with several finalizers overlaps them.** Newest first, each is started in a daemon fiber that inherits the closing fiber's mask (`forkUnsafe(..., true, true, "inherit")`, :4089-4095); `await_all` returns their Exits in that order for S4. Upstream's skip of a finalizer keyed by the closing fiber (`forkIn`) is unreachable until forkIn lands (UPSTREAM_TESTS batch G). | `_close_finalizers` (`fork_daemon(start_immediately=True, uninterruptible="inherit")`, then `await_all`) | `test_parallel_executes_finalizers_in_parallel`, `test_parallel_completes_direct_close_after_interruption`, `test_parallel_continues_and_awaits_remaining_finalizers_after_a_throw`; `test_source_parallel_finalizers_inherit_the_close_mask` (source-derived) |
+| S8 | **Parallel with several finalizers overlaps them.** Newest first, each is started in a daemon fiber that inherits the closing fiber's mask (`forkUnsafe(..., true, true, "inherit")`, :4089-4095); `await_all` returns their Exits in that order for S4. A finalizer keyed by the closing fiber (its own `fork_in`/`run_in` registration) is skipped, as upstream's `key !== parent` (:4090-4093), since running it elsewhere would wait for the closer itself; only the parallel branch skips, as upstream. | `_close_finalizers` (`fork_daemon(start_immediately=True, uninterruptible="inherit")`, then `await_all`; `key is not closing`) | `test_fork_in_does_not_wait_for_the_fiber_that_closes_a_parallel_scope` (`Effect.test.ts:3073`), `test_parallel_executes_finalizers_in_parallel`, `test_parallel_completes_direct_close_after_interruption`, `test_parallel_continues_and_awaits_remaining_finalizers_after_a_throw`; `test_source_parallel_finalizers_inherit_the_close_mask` (source-derived) |
 
 **Not in the formal model.** `verify-formal-kernel` does not model Scope. It changes no kernel
 node: it only composes public combinators the kernel already has.
@@ -263,8 +263,55 @@ remains separate; callers outside the kernel need no new B3 access.
 | FB3 | **Mask inheritance is explicit and precedes startup.** Defaults stay interruptible; daemon workers remain unsupervised. | fork options and `_start` mask assignment before drive/scheduling | both fork API tests, scheduled-start probe; inherit/default mutations; extended protocol model |
 | FB4 | **Bulk success contains typed Exits; worker requirements survive fork.** Unsupported mask options are rejected. | public generic signatures and Literal option validation | positive typetests and negative blocks 42-49 |
 
-Boolean uninterruptible modes remain unsupported. The kernel model covers inherited startup
+`fork` and `fork_daemon` still reject boolean masks. `fork_in` takes `True`, `False` (interruptible, not inherited) or `"inherit"`, as forkUnsafe does (:5622); see L4. The kernel model covers inherited startup
 and the existing interrupt/observer protocol, not bulk ordering or multiple-target semantics.
+
+## Fiber lifecycle
+
+Pinned `internal/effect.ts:5690-5737, :5773-5822, :4077-4101, :650-660`. The kernel
+(`fiber.py`) holds the ordering through `run_in_owner`/`fork_in_owner` over a minimal
+`FiberOwner`; the Scope adapter (`scope.py`) owns the finalizers and exposes `run_in`/`fork_in`.
+
+| # | Invariant | Enforced by | Pinned by |
+|---|---|---|---|
+| L1 | **A root runs its first slice before anyone sees it.** `run_fork`/`run_fork_with` evaluate once; `on_fiber_start` runs after that, and only if the fiber is still live (:5782-5796). The `signal` option (:5785-5793) is not ported. `scheduler=` replaces the context's; `uninterruptible=True` masks the root. | `RootRunner.__call__` | the four `test_source_run_fork_*` tests |
+| L2 | **`run_in` registers once, newest, and leaves on exit.** An exited fiber is left alone; a closed scope interrupts the fiber with its own id; otherwise the old key is removed, the finalizer re-added, and an observer removes it at exit (:5801-5822). | `run_in_owner` | `Fiber.test.ts:10`, `test_source_run_in_*` |
+| L3 | **`fork_in` registers atomically with the start.** One `WithFiber` step forks a daemon (an unstarted fiber if the scope is closed) and, if it is live, attaches it or, if the scope closed meanwhile, interrupts it with the forker's id (:5717-5737). | `fork_in_owner` | `Effect.test.ts:3039` ×2, `:3057`, `test_source_fork_in_*` |
+| L4 | **`fork_in` masks follow forkUnsafe.** `"inherit"` copies the forker's mask; `True` masks; `False` starts interruptible even under a masked forker (:5622). | `fork_in_owner` mask line | `test_source_fork_in_boolean_and_inherited_masks_under_a_masked_parent`, `test_source_fork_in_uninterruptible_starts_the_child_masked` |
+| L5 | **The scope finalizer never waits for its own closer.** It interrupts and awaits the fiber unless that fiber runs the close (:5690-5693). | `_fiber_finalizer` | `Fiber.test.ts:22` |
+| L6 | **`parent` is the live supervisor.** Cleared, with the parent's `children` entry, before exit observers run (:652-655). | `Fiber._publish` | `test_source_parent_is_*` |
+
+Mutation matrix (18 mutants, scratch copies): 16 killed, each by its named test. Two survive
+and are inferred equivalent: skipping `run_in`'s exited check, or `fork_in`'s `_exit` check before
+attaching, is undone by `add_observer` firing at once on an exited fiber and `interrupt_unsafe`
+being a no-op on one. The formal model is unchanged (verify-formal-kernel Sync line).
+
+## ManagedRuntime
+
+Pinned `ManagedRuntime.ts:325–474`; implementation in `managed_runtime.py`.
+Independent review passed 54 focused tests covering disposal, interleavings, typing and boundaries.
+
+| # | Contract | Enforcement and evidence |
+|---|---|---|
+| MR1 | Masking and synchronous invocation of the mask body occur in one operation. This does not make execution of the returned Effect atomic. | `uninterruptible_mask`; disposal's before-claim sweep and mask-then-WithFiber mutant |
+| MR2 | Disposal decides and claims while masked, in the same operation. An interrupt before the claim performs no disposal. | Outer `WithFiber`, inner `uninterruptible_mask`; exhaustive bounded operation sweep |
+| MR3 | The claiming disposer awaits cleanup under its mask and completes the disposal Deferred even if cleanup fails. Completion requires cleanup to terminate. | `_dispose`, `ensuring`; interruption-after-claim and finalizer-defect tests |
+| MR4 | Later disposers restore their inherited interruptibility while waiting. | `restore(done.await_())`; interruptible-waiter tests |
+| MR5 | Reentrant disposal and managed descendants do not wait on themselves. The claimer and its ancestors detach from the fiber scope. | `_DisposingRuntimes`, parent walk; reentry and ancestry tests |
+| MR6 | Runtime hooks precede user hooks. Requests disposing in their first slice skip attachment; build fibers still attach. | Start-hook tests and vendor differential |
+| MR7 | Runtime membership does not retain finished fibers. | WeakSets and `Fiber.__weakref__`; retention regression |
+| MR8 | Async runners await the existing fiber without creating another. One cancellation interrupts without an interruptor and waits for cleanup; a second cancellation can stop that wait. | `await_exit`; differential tests against kernel `run_exit`. Second cancellation is a Python contract. |
+| MR9 | Requirements are contravariant and build errors covariant. | Positive typing fixtures and negative blocks 89–93 |
+
+Disposal is not a universal terminal-state guarantee: captured context effects and a build that
+repopulates the cache after disposal preserve upstream's revival quirks. Cleanup waiting on an
+unrelated disposer can deadlock, also as upstream. `context()` and `dispose()` use unmanaged roots.
+The disposal defect is a Python `RuntimeError`, rather than a string.
+
+Evidence covers 20 vendor scenarios and a bounded manual-scheduler world, including generated
+interleavings. Operation counts differ from upstream. ManagedRuntime is outside the formal
+kernel model; the author's 20,000-example run is bounded testing, not a proof. Synchronous
+runners, callback runners and the signal option remain unported.
 
 ## Traversal
 
@@ -324,11 +371,38 @@ and independently verified by Sol 6.1.
 - `merge_all` is typed for 1 to 4 layers; zero layers, or five or more, are a type error.
   Pyright loses a union whose members all solve to `Never` (`resources.py:70`), so each arity
   covers the all-`Never` E and R channels before the general overload.
-- Not ported: `Layer.fresh`, `suspend`, recovery, tracing, `provide`'s `local` option, and
-  ManagedRuntime.
+- Not ported: `Layer.fresh`, `suspend`, recovery, tracing and `provide`'s `local` option.
 - The :557/:583 op-budget sweep is reduced to named interrupt points, so this is partial
   coverage.
 - Layer is not in the formal model, and the kernel is unchanged.
+
+## Coordination and composition
+
+Latch and Semaphore follow the pinned implementations using public primitives. Their runtime
+and generated-operation tests live in `test_latch_upstream.py` and `test_semaphore_upstream.py`.
+
+| # | Contract | Enforcement and evidence |
+|---|---|---|
+| CO1 | Opening a Latch swaps its waiter batches before notifying them; cancellation removes a waiter from either batch. | Latch methods; operation-sequence property and batch/cancellation regressions |
+| CO2 | Semaphore permit return and wake enqueue happen in one synchronous exit callback. | `on_exit_with_dispatcher`; forced-yield wake/cancel regression and callback timing tests |
+| CO3 | An interrupted queued take leaves no stale entry; an acquired waiter leaves the queue. | Exit frame installed before queue insertion; operation-boundary interruption/yield tests |
+| CO4 | Semaphore conservation holds for balanced `with_permits` use at fixed capacity. Overtaking is permitted. | Generated holder/interrupt sequences; `release_all`, resize and bare take have separate contracts |
+| CO5 | `Some` is immutable and covariant, and distinguishes `Some(None)` from absence. | Runtime tests and positive/negative typing fixtures |
+
+`on_exit_with_dispatcher` runs synchronous bookkeeping while the exit frame is popped and
+masked, with that fiber's dispatcher. Exceptions combine like failing finalizers. Use
+`on_exit` or `ensuring` for effectful cleanup. Coordination is not covered by the formal model.
+
+`Effect.pipe` and `Layer.pipe` accept zero to twenty typed steps. `tap` preserves the success
+value and adds the callback's errors and requirements. The method checks its argument type;
+the pipeable callback parameter is `Any`, a documented Python typing limitation.
+Multiple `catch_tag` or `Layer.provide` steps in one pipe can retain extra errors or
+requirements in the inferred type. Chained single-step pipes narrow precisely.
+
+Python generators are closed on failure so ordinary `finally` blocks execute. If closing
+raises (including yielding from `finally`), the original cause and cleanup defect are combined
+with defect election, preserving interruption. This is a Python adaptation, not JavaScript
+generator parity. Use effect finalizers for effectful cleanup. `test_gen_cleanup.py` pins it.
 
 ## Kernel boundary
 
@@ -343,7 +417,7 @@ white-box and exempt.
 |---|---|---|
 | B1 | **Imports are public.** Outside the kernel, a `peffect` name is imported from `peffect`, or from the kernel module that defines it (as re-exported in `__init__.py`: `from peffect.core import Effect`, relative `from .core import Effect`), or is `peffect.core.WithFiber`. Module-qualified kernel imports (`import peffect.core`, `from peffect import core`) and star imports from a kernel module are rejected; import the names. | `scripts/check_boundaries.py` |
 | B2 | **No reach through the module.** `peffect.X` (any alias of the module) names something in `peffect.__all__`. | same |
-| B3 | **Fibers stay opaque.** On a Fiber, code outside the kernel uses only `context`, `current_op_count`, `await_`, `join`, `interrupt`: the data a service lookup needs, the operation count custom schedulers read in `should_yield` (upstream Fiber.ts:77), and the three effects the kernel's own tests and the example use to wait on or stop a fiber. Run-loop state (`stack`, `running`, `interrupted`, `interruptible`, `children`, `exit`) and unsafe primitives (`interrupt_unsafe`, `take_interrupt`, `add_observer`, `swap_context`) stay inside. `context` is a read-only property over a read-only map: assigning or deleting it is a pyright error and an `AttributeError`, writing an item a `TypeError` (`typetests/should_fail.py` 12–14, `test_fiber_context_is_read_only_and_owned`), so the lint checks reads only. This list is a specification: a new public Fiber member is a deliberate edit to `FIBER_PUBLIC`. | same |
+| B3 | **Fibers stay opaque.** On a Fiber, code outside the kernel uses only `context`, `current_op_count`, `parent`, `await_`, `join`, `interrupt`: the data a service lookup needs, the operation count custom schedulers read in `should_yield` (upstream Fiber.ts:77), the live supervisor a runtime's disposal walks (ManagedRuntime.ts:404; read-only, `None` once exited), and the three effects the kernel's own tests and the example use to wait on or stop a fiber. Run-loop state (`stack`, `running`, `interrupted`, `interruptible`, `children`, `exit`) and unsafe primitives (`interrupt_unsafe`, `take_interrupt`, `add_observer`, `swap_context`) stay inside. `context` is a read-only property over a read-only map: assigning or deleting it is a pyright error and an `AttributeError`, writing an item a `TypeError` (`typetests/should_fail.py` 12–14, `test_fiber_context_is_read_only_and_owned`), so the lint checks reads only. This list is a specification: a new public Fiber member is a deliberate edit to `FIBER_PUBLIC`. | same |
 
 **What B3 can see.** A value counts as a Fiber when it is the first parameter of a lambda or a
 named `def` passed to `WithFiber` (or an alias of it, directly or as `f=`), or a parameter

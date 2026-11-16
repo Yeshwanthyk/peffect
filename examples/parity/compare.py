@@ -39,6 +39,11 @@ SCENARIOS = [
     "composed_payment_replacement",
     "composed_parallel_batch",
     "composed_batch_cancellation",
+    "batch_settle_mixed",
+    "batch_settle_audited_payments",
+    "batch_settle_custom_audit",
+    "batch_settle_cancellation",
+    "batch_settle_ledger_full",
 ]
 
 

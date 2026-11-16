@@ -423,6 +423,242 @@
         "batch.cancel.returned",
         "terminated:interrupt"
       ]
+    },
+    {
+      "name": "batch_settle_mixed",
+      "outcome": {
+        "kind": "success",
+        "value": [
+          {
+            "userId": 1,
+            "status": "paid",
+            "detail": "charged:1"
+          },
+          {
+            "userId": 2,
+            "status": "pending",
+            "detail": "manual-review"
+          },
+          {
+            "userId": 99,
+            "status": "rejected",
+            "detail": "unknown-user:99"
+          },
+          {
+            "userId": 1,
+            "status": "rejected",
+            "detail": "out-of-stock:sold-out"
+          }
+        ]
+      },
+      "repo": {
+        "acquire": 1,
+        "release": 1
+      },
+      "events": [
+        "repo.acquire",
+        "users.build",
+        "inventory.acquire",
+        "payments.acquire",
+        "risk.build",
+        "checkout.build",
+        "ledger.open",
+        "batch.build",
+        "risk.checked:1",
+        "inventory.reserve:1:book",
+        "payments.charge:1",
+        "reservation.release:1:book:success",
+        "ledger.append:1:paid",
+        "risk.checked:2",
+        "inventory.reserve:2:book",
+        "payments.charge:2",
+        "reservation.release:2:book:failure",
+        "payment.recovered:2",
+        "ledger.append:2:pending",
+        "ledger.append:99:rejected",
+        "risk.checked:1",
+        "inventory.reserve:1:sold-out",
+        "ledger.append:1:rejected",
+        "ledger.close:success:4",
+        "payments.release:success",
+        "inventory.release:success",
+        "repo.release:success",
+        "terminated:success"
+      ]
+    },
+    {
+      "name": "batch_settle_audited_payments",
+      "outcome": {
+        "kind": "success",
+        "value": [
+          {
+            "userId": 1,
+            "status": "paid",
+            "detail": "sandbox:1"
+          },
+          {
+            "userId": 2,
+            "status": "paid",
+            "detail": "sandbox:2"
+          }
+        ]
+      },
+      "repo": {
+        "acquire": 1,
+        "release": 1
+      },
+      "events": [
+        "repo.acquire",
+        "users.build",
+        "inventory.acquire",
+        "ledger.open",
+        "payments.audited.build",
+        "risk.build",
+        "checkout.build",
+        "batch.build",
+        "risk.checked:1",
+        "inventory.reserve:1:book",
+        "ledger.append:1:charge",
+        "reservation.release:1:book:success",
+        "ledger.append:1:paid",
+        "risk.checked:2",
+        "inventory.reserve:2:book",
+        "ledger.append:2:charge",
+        "reservation.release:2:book:success",
+        "ledger.append:2:paid",
+        "ledger.close:success:4",
+        "inventory.release:success",
+        "repo.release:success",
+        "terminated:success"
+      ]
+    },
+    {
+      "name": "batch_settle_custom_audit",
+      "outcome": {
+        "kind": "success",
+        "value": [
+          {
+            "userId": 1,
+            "status": "unrecorded",
+            "detail": "ledger-full:1"
+          },
+          {
+            "userId": 2,
+            "status": "unrecorded",
+            "detail": "ledger-full:1"
+          }
+        ]
+      },
+      "repo": {
+        "acquire": 1,
+        "release": 1
+      },
+      "events": [
+        "repo.acquire",
+        "users.build",
+        "inventory.acquire",
+        "ledger.open",
+        "payments.audited.build",
+        "risk.build",
+        "checkout.build",
+        "batch.build",
+        "risk.checked:1",
+        "inventory.reserve:1:book",
+        "ledger.append:1:charge",
+        "reservation.release:1:book:success",
+        "ledger.full:1",
+        "risk.checked:2",
+        "inventory.reserve:2:book",
+        "ledger.full:2",
+        "reservation.release:2:book:failure",
+        "payment.recovered:2",
+        "ledger.full:2",
+        "ledger.close:success:1",
+        "inventory.release:success",
+        "repo.release:success",
+        "terminated:success"
+      ]
+    },
+    {
+      "name": "batch_settle_cancellation",
+      "outcome": {
+        "kind": "interrupted"
+      },
+      "repo": {
+        "acquire": 1,
+        "release": 1
+      },
+      "events": [
+        "repo.acquire",
+        "users.build",
+        "inventory.acquire",
+        "risk.build",
+        "checkout.build",
+        "ledger.open",
+        "batch.build",
+        "risk.checked:1",
+        "inventory.reserve:1:book",
+        "charge.ok:1",
+        "reservation.release:1:book:success",
+        "ledger.append:1:paid",
+        "risk.checked:2",
+        "inventory.reserve:2:book",
+        "charge.hanging:2",
+        "settle.cancel.requested",
+        "reservation.release:2:book:interrupt",
+        "ledger.close:interrupt:1",
+        "inventory.release:interrupt",
+        "repo.release:interrupt",
+        "settle.cancel.returned",
+        "terminated:interrupt"
+      ]
+    },
+    {
+      "name": "batch_settle_ledger_full",
+      "outcome": {
+        "kind": "success",
+        "value": [
+          {
+            "userId": 1,
+            "status": "paid",
+            "detail": "charged:1"
+          },
+          {
+            "userId": 2,
+            "status": "unrecorded",
+            "detail": "ledger-full:1"
+          }
+        ]
+      },
+      "repo": {
+        "acquire": 1,
+        "release": 1
+      },
+      "events": [
+        "repo.acquire",
+        "users.build",
+        "inventory.acquire",
+        "payments.acquire",
+        "risk.build",
+        "checkout.build",
+        "ledger.open",
+        "batch.build",
+        "risk.checked:1",
+        "inventory.reserve:1:book",
+        "payments.charge:1",
+        "reservation.release:1:book:success",
+        "ledger.append:1:paid",
+        "risk.checked:2",
+        "inventory.reserve:2:book",
+        "payments.charge:2",
+        "reservation.release:2:book:success",
+        "ledger.full:2",
+        "ledger.close:success:1",
+        "payments.release:success",
+        "inventory.release:success",
+        "repo.release:success",
+        "terminated:success"
+      ]
     }
   ]
 }

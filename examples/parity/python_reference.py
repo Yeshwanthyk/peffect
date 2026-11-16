@@ -24,6 +24,7 @@ from examples.parity.python_app import (
     make_app,
     record,
 )
+from examples.parity.python_batch_scenarios import BATCH_SCENARIOS
 from examples.parity.python_composed import OutOfStock, PaymentDeclined
 from examples.parity.python_scenarios import COMPOSED_SCENARIOS
 from peffect import (
@@ -140,7 +141,7 @@ async def run_scenarios() -> list[dict[str, object]]:
         ),
         await scenario("cancellation_after_acquire", cancellation()),
     ]
-    for name, program in COMPOSED_SCENARIOS:
+    for name, program in [*COMPOSED_SCENARIOS, *BATCH_SCENARIOS]:
         results.append(await scenario(name, program))
     return results
 

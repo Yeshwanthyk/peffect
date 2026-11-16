@@ -15,49 +15,22 @@ Adaptations used throughout (as test_deferred_upstream.py and test_scheduler_ups
   `fiber.pollUnsafe()` is `fiber.exit`; `Fiber.interrupt(f)` is `f.interrupt()`;
   `Fiber.join(f)` is `f.join()`; `Fiber.await(f)` is `f.await_()`.
 - `Effect.provideService(Scheduler.Scheduler, s)` is `provide(Scheduler.context(s))`.
-- `peffect.latch` does not exist yet, so it is looked up when each test runs: every test fails
-  until it lands instead of the file failing to import. The lookup becomes an import then.
 """
 
 import asyncio
-import importlib
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Literal, Never, Protocol
+from typing import Any, Literal, Never
 
-from hypothesis import given, settings
+from hypothesis import example, given, settings
 from hypothesis import strategies as st
 
 from peffect import Effect, Exit, Failure, Fiber, Interrupt, fork, gen, never, provide, run, sync
 from peffect import yield_now as yield_now_
+from peffect.latch import Latch
 from peffect.scheduler import Scheduler
 
 type Task = Callable[[], None]
-
-
-class LatchLike(Protocol):
-    """The proposed instance API (Latch.ts:53-127); replaced by the real class on landing."""
-
-    def open(self) -> Effect[bool, Never, Never]: ...
-    def open_unsafe(self) -> bool: ...
-    def release(self) -> Effect[bool, Never, Never]: ...
-    def await_(self) -> Effect[None, Never, Never]: ...
-    def close(self) -> Effect[bool, Never, Never]: ...
-    def close_unsafe(self) -> bool: ...
-    def when_open[A, E, R](self, eff: Effect[A, E, R], /) -> Effect[A, E, R]: ...
-    def is_open(self) -> bool: ...
-
-
-class LatchClass(Protocol):
-    """Constructors (Latch.ts:164, :200): closed unless ``open`` is True."""
-
-    def make(self, open: bool = False, /) -> Effect[LatchLike, Never, Never]: ...
-    def make_unsafe(self, open: bool = False, /) -> LatchLike: ...
-
-
-def latch_api() -> LatchClass:
-    """`peffect.latch.Latch`, imported when the test runs: ModuleNotFoundError until it exists."""
-    return importlib.import_module("peffect.latch").Latch
 
 
 async def bounded(eff: Effect[None, Any, Never], seconds: float = 5) -> None:
@@ -106,7 +79,6 @@ def run_task(scheduler: QueueingScheduler) -> Effect[None, Never, Never]:
 
 async def test_release_wakes_current_waiters_and_keeps_the_latch_closed():
     """Latch.test.ts:6."""
-    Latch = latch_api()
 
     @gen
     def program():
@@ -123,7 +95,6 @@ async def test_release_wakes_current_waiters_and_keeps_the_latch_closed():
 
 async def test_is_open_reflects_the_state_of_the_latch():
     """Latch.test.ts:23."""
-    Latch = latch_api()
 
     @gen
     def program():
@@ -138,7 +109,6 @@ async def test_is_open_reflects_the_state_of_the_latch():
 
 async def test_open_then_close_does_not_resume_waiters_registered_after_close():
     """Latch.test.ts:35."""
-    Latch = latch_api()
 
     @gen
     def program():
@@ -157,7 +127,6 @@ async def test_open_then_close_does_not_resume_waiters_registered_after_close():
 
 async def test_release_while_a_flush_is_pending_covers_the_new_waiters():
     """Latch.test.ts:57."""
-    Latch = latch_api()
     scheduler = QueueingScheduler()
 
     @gen
@@ -179,7 +148,6 @@ async def test_release_while_a_flush_is_pending_covers_the_new_waiters():
 
 async def test_release_does_not_resume_waiters_registered_after_the_release():
     """Latch.test.ts:95."""
-    Latch = latch_api()
 
     @gen
     def program():
@@ -197,7 +165,6 @@ async def test_release_does_not_resume_waiters_registered_after_the_release():
 
 async def test_open_unsafe_does_not_resume_waiters_registered_after_a_reentrant_close():
     """Latch.test.ts:116."""
-    Latch = latch_api()
     scheduler = QueueingScheduler()
     second: list[Fiber[None, Never]] = []
 
@@ -225,7 +192,6 @@ async def test_open_unsafe_does_not_resume_waiters_registered_after_a_reentrant_
 
 async def test_interrupting_a_waiter_removes_it_from_a_pending_flush():
     """Latch.test.ts:153."""
-    Latch = latch_api()
     scheduler = QueueingScheduler()
     resumed: list[str] = []
 
@@ -249,11 +215,10 @@ async def test_interrupting_a_waiter_removes_it_from_a_pending_flush():
 
 async def test_await_is_interruptible_and_cleans_up_interrupted_waiters():
     """Latch.test.ts:192."""
-    Latch = latch_api()
     scheduler = QueueingScheduler()
     resumed: list[str] = []
 
-    def waiting(latch: LatchLike, label: str) -> Effect[None, Never, Never]:
+    def waiting(latch: Latch, label: str) -> Effect[None, Never, Never]:
         return latch.await_().flat_map(lambda _: sync(lambda: resumed.append(label)))
 
     @gen
@@ -285,9 +250,9 @@ async def test_await_is_interruptible_and_cleans_up_interrupted_waiters():
 
 
 async def test_make_defaults_closed_and_open_close_report_transitions():
-    """internal/effect.ts:5982-5986, :6002-6006, :6014 (`open ?? false`); Latch.ts:212, :233
-    ("true when this call changed the latch"), release :252-253 ("false if already open")."""
-    Latch = latch_api()
+    """internal/effect.ts:5978-5983, :6001-6005, :6014 (`open ?? false`); Latch.ts:212, :233
+    ("true when this call changed the latch"), release :257-258 ("false if the latch was
+    already open")."""
 
     @gen
     def program():
@@ -308,10 +273,9 @@ async def test_make_defaults_closed_and_open_close_report_transitions():
 
 
 async def test_open_effect_wakes_waiters_on_the_dispatcher_not_inline():
-    """internal/effect.ts:5976-5980: `open` goes through scheduleUnsafe, so waiters resume when
-    the dispatcher runs the flush, while `openUnsafe` (:5982-5986) resumes them before
-    returning. Awaiting while open completes without suspending (:5987-5990)."""
-    Latch = latch_api()
+    """internal/effect.ts:5972-5976: `open` goes through scheduleUnsafe, so waiters resume when
+    the dispatcher runs the flush, while `openUnsafe` (:5978-5983) resumes them before
+    returning. Awaiting while open completes without suspending (:5985-5987)."""
     scheduler = QueueingScheduler()
 
     @gen
@@ -335,8 +299,7 @@ async def test_open_effect_wakes_waiters_on_the_dispatcher_not_inline():
 
 
 async def test_when_open_gates_the_effect_and_preserves_its_result():
-    """internal/effect.ts:6008 (`flatMap(this.await, () => self)`); Latch.ts:349-353."""
-    Latch = latch_api()
+    """internal/effect.ts:6007 (`flatMap(this.await, () => self)`); Latch.ts:349-353."""
     ran: list[int] = []
 
     @gen
@@ -357,10 +320,15 @@ async def test_when_open_gates_the_effect_and_preserves_its_result():
 #
 # Invariant: after any sequence of await / open / open_unsafe / release / close / close_unsafe /
 # interrupt / turn, each waiter's state (pending, resumed, interrupted) and `is_open()` equal
-# the model's. The model is written from the pinned source's two lists (`waiters`, `scheduled`)
-# and never reads peffect code. `turn` is one `yield_now` of the driving fiber, which runs the
-# flush task queued ahead of it on the same default dispatcher. No ordering among resumed
-# waiters is asserted: the source promises none.
+# the model's, and each resumed waiter's continuation ran exactly once (no lost, no double wake).
+# White-box detector: the sizes of the source's public `waiters` and `scheduled` lists equal the
+# model's, so an interrupted waiter leaves whichever list holds it (cancel, :5989-5999) and a
+# fired resume never stays queued. The model is written from the pinned source and never reads
+# peffect code. Controls: the default scheduler; `turn` is one `yield_now` of the driving fiber,
+# which runs the flush task queued ahead of it on the same dispatcher; interrupts land only on
+# parked waiters (Fiber.interrupt from the driver), so this is sequence evidence, not a race
+# proof; any-operation interruption is covered by the scheduler-driven tests above. No ordering
+# among resumed waiters is asserted: the source promises none.
 
 Op = (
     tuple[Literal["await", "open", "open_unsafe", "release", "close", "close_unsafe", "turn"],]
@@ -410,7 +378,7 @@ class LatchModel:
                 self.is_open = False
             case ("turn",):
                 self.flush_scheduled()
-            case ("interrupt", w):  # cancel :5991-6001
+            case ("interrupt", w):  # cancel :5989-5999
                 if self.state.get(w) == "pending":
                     self.state[w] = "interrupted"
                     self.waiters = [x for x in self.waiters if x != w]
@@ -420,14 +388,18 @@ class LatchModel:
                 raise AssertionError(op)
 
 
+# One branch per operation kind, so each is drawn equally often: a two-branch one_of gave
+# interrupt half the weight, and await -> open/release -> turn (a flush of a non-empty batch)
+# then appeared in none of 150 examples.
 ops = st.lists(
     st.one_of(
-        st.sampled_from(
-            ["await", "open", "open_unsafe", "release", "close", "close_unsafe", "turn"]
-        ).map(lambda name: (name,)),
+        *(
+            st.just((name,))
+            for name in ("await", "open", "open_unsafe", "release", "close", "close_unsafe", "turn")
+        ),
         st.tuples(st.just("interrupt"), st.integers(0, 7)),
     ),
-    max_size=24,
+    max_size=32,
 )
 
 
@@ -438,20 +410,26 @@ def observed(fiber: Fiber[None, Never]) -> str:
 
 @settings(max_examples=150, deadline=None)
 @given(ops, st.booleans())
+# Minimized from a mutant whose flush kept `scheduled`: the generator once reached it in no draw.
+@example([("await",), ("release",), ("turn",)], False)
 async def test_latch_matches_its_source_model_over_operation_sequences(
     sequence: list[Op], start_open: bool
 ):
-    Latch = latch_api()
     model = LatchModel(start_open, [], None, {})
 
     @gen
     def program():
         latch = Latch.make_unsafe(start_open)
         fibers: list[Fiber[None, Never]] = []
+        runs: list[int] = []
         for op in sequence:
             match op:
                 case ("await",):
-                    fibers.append((yield from fork(latch.await_(), start_immediately=True)))
+                    i = len(runs)
+                    runs.append(0)
+                    count = sync(lambda i=i: runs.__setitem__(i, runs[i] + 1))
+                    waiter = latch.await_().flat_map(lambda _, count=count: count)
+                    fibers.append((yield from fork(waiter, start_immediately=True)))
                 case ("open",):
                     yield from latch.open()
                 case ("release",):
@@ -465,13 +443,18 @@ async def test_latch_matches_its_source_model_over_operation_sequences(
                 case ("turn",):
                     yield from yield_now_
                 case ("interrupt", w):
-                    if w < len(fibers):
-                        yield from fibers[w].interrupt()
+                    if fibers:  # constructive: the index always names an existing waiter
+                        op = ("interrupt", w % len(fibers))
+                        yield from fibers[op[1]].interrupt()
                 case _:
                     raise AssertionError(op)
             model.apply(op)
             assert latch.is_open() is model.is_open, op
             assert [observed(f) for f in fibers] == [model.state[i] for i in range(len(fibers))]
+            assert runs == [int(model.state[i] == "resumed") for i in range(len(runs))], op
+            assert len(latch.waiters) == len(model.waiters), op
+            assert (latch.scheduled is None) == (model.scheduled is None), op
+            assert len(latch.scheduled or []) == len(model.scheduled or []), op
         # Pending waiters are supervised children: the run interrupts them when this body ends.
 
     await bounded(program(), 1)

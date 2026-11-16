@@ -3,12 +3,12 @@
 Source-derived application reference, not an upstream test port. It runs the
 `docs/FIRST_USABLE_SLICE.md` scenarios on the real pinned Effect v4. Its output is the baseline
 for the Python counterpart. `compare.py` runs both applications fresh and checks their outcomes,
-resource counts and complete ordered event logs. All 16 scenarios currently match.
+resource counts and complete ordered event logs. All 20 scenarios currently match.
 
 ## Reading and reusing the code
 
-Start with `python_app.py` and `python_composed.py`: these are the application modules.
-The TypeScript counterparts are `app.ts` and `composed.ts`. They use the existing public
+Start with `python_app.py`, `python_composed.py` and `python_batch.py`: these are the
+application modules. The TypeScript counterparts are `app.ts`, `composed.ts` and `batch.ts`. They use the existing public
 Effect/Context/Layer/resource APIs; no kernel access, type suppressions, casts, or custom
 runtime machinery are needed.
 
@@ -22,9 +22,12 @@ runtime machinery are needed.
 | selective error recovery | `place_or_pending`, with its remaining error union pinned in typetests |
 | per-run state | `EventLog` Reference provided with a fresh sink by the runner; never a cached mutable default |
 | replace a service | `make_checkout_app(payments)`; business logic is unchanged |
+| build a feature on an existing app | `make_batch_app` provides the unchanged checkout app plus a Ledger to `BatchLive` |
+| side effect that keeps the value | `settle_and_record`: `tap(ledger.append)` in a three-step `pipe` |
+| turn each error into data | `settle_one` and `settle_and_record` recover by tag until the error channel is `Never` |
 
-`python_scenarios.py` / `composed_scenarios.ts` are deterministic test fixtures, not application
-services. The two reference runners own observation and serialization. `compare.py` is a test
+`python_scenarios.py` / `composed_scenarios.ts` and `python_batch_scenarios.py` /
+`batch_scenarios.ts` are deterministic test fixtures, not application services. The two reference runners own observation and serialization. `compare.py` is a test
 tool. Keep that separation when copying the example. Its inventory and payment implementations
 are deliberately in-memory; replace them with real adapters for an actual application.
 
@@ -133,6 +136,38 @@ are no sleeps or fixed-yield guesses. A wall-clock watchdog only prevents a brok
 These are deterministic in-memory application services, not real inventory/payment clients.
 No stock-accounting, database transaction, network, or external payment guarantee is claimed.
 
+## Batch settlement (`batch.ts`, `python_batch.py`)
+
+The third module is a feature added on top of the checkout application without editing it.
+`Batch.settle` places each order (concurrency 2) through the existing `place_or_pending` use case
+and appends one line per order to a `Ledger`. Settlement never fails: `PaymentDeclined` is already
+a pending receipt, `UserNotFound` and `OutOfStock` become `rejected` lines, and a Ledger that
+refuses a line (`LedgerFull`) leaves that order `unrecorded`.
+
+- **Shared resource.** The Ledger is Layer-scoped (`ledger.open`, `ledger.close:<exit>:<lines>`).
+  `make_audited_batch_app(ledger)` / `makeAuditedBatchApp(ledger)` supplies the chosen Ledger
+  to both the audited Payments replacement and Batch. They share one layer identity, including
+  when a custom capacity is selected. Capacity checks and appends run atomically at execution
+  time, so preconstructing or replaying an append effect cannot bypass the limit.
+- **Tap.** `ledger.append` runs as a tap: the settled line stays the value, and the tap's
+  `LedgerFull` enters the error channel, where the next pipe step recovers it by tag.
+- **Types.** Both sides declare `settle_one` as `Effect<Line, never, Checkout>` and the composed
+  per-order effect as `Effect<Line>`; pyright and tsc check those annotations against the pipes.
+
+| scenario | result and lifecycle assertion |
+|---|---|
+| batch_settle_mixed | four orders give paid, pending, rejected, rejected lines in input order; Ledger closes with 4 lines before Payments, Inventory and Repo |
+| batch_settle_audited_payments | one `ledger.open`; charge and settlement lines interleave in one Ledger, which closes with 4 lines |
+| batch_settle_custom_audit | a custom capacity-1 Ledger opens once and closes with one combined line |
+| batch_settle_cancellation | order 1 is recorded, order 2 hangs in its charge; the interrupt releases the reservation, Ledger (1 line), Inventory and Repo before it returns |
+| batch_settle_ledger_full | capacity 1: order 2 is charged, `ledger.full:2` fails the tap, recovery yields an `unrecorded` line and every resource closes with success |
+
+In these scenarios each order runs to completion before the next starts, because no step
+suspends; only the cancellation scenario has a suspended worker. The traces therefore pin
+result order, resource sharing and release order, not interleaving of concurrent settlements.
+The Ledger is an in-memory list. An `unrecorded` line means the order was charged and not
+audited; a real system needs its own compensation there, and none is claimed.
+
 ## Typing fixtures (`fixtures/`, `fixtures/check.output.json`)
 
 `check.ts` compiles both files with the TypeScript compiler API and this tsconfig.
@@ -171,4 +206,6 @@ The checker was probed both ways:
   (bun). They were not re-run under node.
 - `negative.ts` is excluded from the `tsc -p` gate on purpose; `check.ts` is its gate.
 - This does not implement ManagedRuntime, TestClock, or any new kernel primitive. The comparison
-  establishes these 16 application traces, not arbitrary program equivalence.
+  establishes these 20 application traces, not arbitrary program equivalence.
+- The batch module has no typing fixtures of its own: no negative block proves that a missing
+  Ledger or an unrecovered `LedgerFull` is rejected. Its annotations are checked by pyright and tsc.

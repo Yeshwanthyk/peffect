@@ -161,6 +161,7 @@ def with_dispatcher[A, E, R](
 @final
 class Fiber(Generic[A_co, E_co]):
     __slots__ = (
+        "__weakref__",  # runtimes track fibers in WeakSets (ManagedRuntime.ts:338-339)
         "_ask_scheduler",
         "_auto_yielded",
         "_context",
@@ -370,8 +371,9 @@ class Fiber(Generic[A_co, E_co]):
 
     def _publish(self, exit_: Exit[Any, Any]) -> None:
         self._exit = exit_
-        if self._parent is not None:
+        if self._parent is not None:  # cleared before observers run (internal/effect.ts:652-655)
             self._parent.children.discard(self)
+            self._parent = None
         observers, self._observers = self._observers, []
         for cb in observers:
             cb(exit_)
@@ -379,6 +381,12 @@ class Fiber(Generic[A_co, E_co]):
     @property
     def exit(self) -> Exit[A_co, E_co] | None:
         return self._exit
+
+    @property
+    def parent(self) -> Fiber[Any, Any] | None:
+        """The supervising fiber while this one is live: None for a root or daemon, and once
+        this fiber has exited (FiberImpl._parent, internal/effect.ts:5624-5627, :652-655)."""
+        return self._parent
 
     def add_observer(self, cb: Observer) -> Callable[[], None]:
         """Call cb with the exit when the fiber is done (now, if it is). Returns remove()."""
@@ -574,6 +582,57 @@ def fork_daemon[A, E, R](
     )
 
 
+class FiberOwner(Protocol):
+    """What `run_in_owner` and `fork_in_owner` need from a Scope: whether it is closed, and
+    adding or removing the fiber's own finalizer, keyed by the fiber (scope.py's adapter)."""
+
+    def is_closed(self) -> bool: ...
+    def attach(self, fiber: Fiber[Any, Any]) -> None: ...
+    def detach(self, fiber: Fiber[Any, Any]) -> None: ...
+
+
+def run_in_owner[A, E](fiber: Fiber[A, E], owner: FiberOwner) -> Fiber[A, E]:
+    """fiberRunIn, internal/effect.ts:5801-5822: re-attach the fiber as the owner's newest
+    finalizer and detach it when it exits. A closed owner interrupts it with its own id."""
+    if fiber.exit is not None:
+        return fiber
+    if owner.is_closed():
+        fiber.interrupt_unsafe(fiber.id)
+        return fiber
+    owner.detach(fiber)
+    owner.attach(fiber)
+    fiber.add_observer(lambda _: owner.detach(fiber))
+    return fiber
+
+
+def fork_in_owner[A, E, R](
+    eff: Effect[A, E, R],
+    owner: FiberOwner,
+    *,
+    start_immediately: bool = False,
+    uninterruptible: bool | Literal["inherit"] = False,
+) -> Effect[Fiber[A, E], Never, R]:
+    """forkIn, internal/effect.ts:5717-5737: fork a daemon and attach it in one step. A closed
+    owner gets an unstarted fiber; one that closed during an immediate start is re-checked.
+    Either is interrupted with the forker's id."""
+
+    def go(parent: Fiber[Any, Any]) -> Effect[Fiber[A, E], Never, R]:
+        if owner.is_closed():
+            fiber: Fiber[A, E] = Fiber(parent.context)
+        else:
+            mask = parent.interruptible if uninterruptible == "inherit" else not uninterruptible
+            fiber = _start(None, eff, parent.context, parent, start_immediately, mask)
+        if fiber.exit is None:
+            if not owner.is_closed():
+                owner.attach(fiber)
+                fiber.add_observer(lambda _: owner.detach(fiber))
+            else:
+                fiber.interrupt_unsafe(parent.id)
+        return Success(fiber)
+
+    return WithFiber(go)
+
+
 # ================================================================================================
 # Traversal
 # ================================================================================================
@@ -755,13 +814,63 @@ def _for_each_concurrent[A, B, E, R](
     return go()
 
 
-async def run_exit[A, E](eff: Effect[A, E, Never]) -> Exit[A, E]:
-    """Run on the current asyncio loop and return the Exit. The fiber starts at once, so its
-    synchronous prefix runs before this first awaits (internal/effect.ts:5777, runForkWith).
-    Cancelling the awaiting task interrupts the fiber and waits for its finalizers before
-    re-raising CancelledError."""
+type FiberStartHook = Callable[[Fiber[Any, Any]], object]
+
+
+@final
+class RootRunner:
+    """``run_fork_with(context)``: start roots over a raw context map. The map carries no
+    requirement types; a typed ``Context[R]`` front belongs outside the kernel."""
+
+    __slots__ = ("_context",)
+
+    def __init__(self, context: ContextMap) -> None:
+        self._context: Final = context
+
+    def __call__[A, E](
+        self,
+        eff: Effect[A, E, Any],
+        *,
+        scheduler: SchedulerService | None = None,
+        uninterruptible: bool = False,
+        on_fiber_start: FiberStartHook | None = None,
+    ) -> Fiber[A, E]:
+        """runForkWith, internal/effect.ts:5773-5799: evaluate at once; only a fiber still live
+        after that first slice reaches ``on_fiber_start``. ``scheduler`` replaces the context's."""
+        ctx = self._context if scheduler is None else {**self._context, _SCHEDULER_KEY: scheduler}
+        fiber: Fiber[A, E] = Fiber(ctx)
+        fiber.interruptible = uninterruptible is not True
+        fiber.evaluate(eff)
+        if fiber.exit is None and on_fiber_start is not None:
+            on_fiber_start(fiber)
+        return fiber
+
+
+def run_fork_with(context: ContextMap) -> RootRunner:
+    return RootRunner(context)
+
+
+def run_fork[A, E](
+    eff: Effect[A, E, Never],
+    *,
+    scheduler: SchedulerService | None = None,
+    uninterruptible: bool = False,
+    on_fiber_start: FiberStartHook | None = None,
+) -> Fiber[A, E]:
+    """runFork, internal/effect.ts:5824-5827: ``run_fork_with`` over the empty context. The
+    fiber's synchronous prefix has run when this returns."""
+    return RootRunner(EMPTY_CONTEXT)(
+        eff, scheduler=scheduler, uninterruptible=uninterruptible, on_fiber_start=on_fiber_start
+    )
+
+
+async def await_exit[A, E](fiber: Fiber[A, E]) -> Exit[A, E]:
+    """Wait on the current asyncio loop for ``fiber``'s Exit through an observer, with no second
+    fiber (runPromiseExitWith, internal/effect.ts:5854-5866). Cancelling the awaiting task
+    interrupts the fiber with no interruptor (signal abort, :5785-5793) and waits for its
+    finalizers before re-raising CancelledError; a second cancel during that wait stops waiting
+    and leaves the fiber to finish."""
     fut: asyncio.Future[Exit[A, E]] = asyncio.get_running_loop().create_future()
-    fiber = _start(None, eff, EMPTY_CONTEXT)
     fiber.add_observer(lambda ex: None if fut.done() else fut.set_result(ex))
     try:
         return await asyncio.shield(fut)
@@ -769,6 +878,14 @@ async def run_exit[A, E](eff: Effect[A, E, Never]) -> Exit[A, E]:
         fiber.interrupt_unsafe()
         await fut
         raise
+
+
+async def run_exit[A, E](eff: Effect[A, E, Never]) -> Exit[A, E]:
+    """Run on the current asyncio loop and return the Exit. The fiber starts at once, so its
+    synchronous prefix runs before this first awaits (internal/effect.ts:5777, runForkWith).
+    Cancelling the awaiting task interrupts the fiber and waits for its finalizers before
+    re-raising CancelledError (``await_exit``)."""
+    return await await_exit(_start(None, eff, EMPTY_CONTEXT))
 
 
 async def run[A](eff: Effect[A, Never, Never]) -> A:
@@ -783,15 +900,23 @@ __all__ = [
     "DEFAULT_SCHEDULER",
     "UNIT",
     "Fiber",
+    "FiberOwner",
+    "FiberStartHook",
     "MixedScheduler",
+    "RootRunner",
     "SchedulerDispatcher",
     "SchedulerService",
     "await_all",
+    "await_exit",
     "for_each",
     "fork",
     "fork_daemon",
+    "fork_in_owner",
     "interrupt_all",
     "run",
     "run_exit",
+    "run_fork",
+    "run_fork_with",
+    "run_in_owner",
     "with_dispatcher",
 ]

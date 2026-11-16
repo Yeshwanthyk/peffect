@@ -38,6 +38,10 @@ def scheduler_should_yield(fiber: Fiber[Any, Any]) -> bool:
     return fiber.current_op_count >= 2048
 
 
+def supervisor(fiber: Fiber[Any, Any]) -> Fiber[Any, Any] | None:
+    return fiber.parent
+
+
 def stop(fiber: "F2[Any, Any]"):
     return fiber.interrupt()
 

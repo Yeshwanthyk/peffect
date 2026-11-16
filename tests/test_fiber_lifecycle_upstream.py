@@ -40,6 +40,7 @@ from peffect import (
     run,
     succeed,
     sync,
+    uninterruptible,
     yield_now,
 )
 from peffect.core import WithFiber
@@ -121,7 +122,7 @@ async def test_fork_in_does_not_run_work_in_a_closed_scope_with_uninterruptible(
 
 
 async def test_fork_in_is_interrupted_when_scope_is_closed():
-    """Effect.test.ts:3056."""
+    """Effect.test.ts:3057."""
     interrupted: list[bool] = []
 
     @gen
@@ -239,7 +240,7 @@ async def test_source_run_in_a_closed_scope_interrupts_with_the_fibers_own_id():
 
 
 async def test_source_run_in_detaches_when_the_fiber_exits_first():
-    """fiberRunIn :5818: the observer removes the fiber's key, so the scope is Empty again."""
+    """fiberRunIn :5819: the observer removes the fiber's key, so the scope is Empty again."""
     scope = Scope.make_unsafe()
     fiber = run_fork(yield_now)
     run_in(fiber, scope)
@@ -301,6 +302,15 @@ async def test_source_fork_in_a_closed_scope_interrupts_with_the_parents_id():
     assert interrupters(fiber.exit) == [parent]
 
 
+async def test_source_fork_in_detaches_when_the_fiber_exits_first():
+    """forkIn :5732: the observer removes the fiber's key, so the scope is Empty again."""
+    scope = Scope.make_unsafe()
+    fiber = await within(run(fork_in(yield_now, scope)))
+    assert isinstance(scope.state, Open)
+    await within(run(fiber.await_()))
+    assert isinstance(scope.state, Empty)
+
+
 async def test_source_fork_in_child_is_a_daemon_owned_by_the_scope():
     """forkIn :5724 forks with daemon=true: the parent's end does not interrupt the child."""
     interrupted: list[bool] = []
@@ -341,11 +351,62 @@ async def test_source_fork_in_uninterruptible_starts_the_child_masked():
     assert isinstance(fiber.exit, Success) and fiber.exit.value is False
 
 
+async def test_source_fork_in_boolean_and_inherited_masks_under_a_masked_parent():
+    """forkUnsafe :5622-5623: `"inherit"` copies the forker's mask; otherwise the child is
+    `!uninterruptible`, so `false` gives an interruptible child even from a masked parent."""
+    scope = Scope.make_unsafe()
+    read = WithFiber(lambda f: succeed(f.interruptible))
+
+    def masks(option: bool | Literal["inherit"]) -> bool:
+        fiber = run_fork(
+            uninterruptible(fork_in(read, scope, start_immediately=True, uninterruptible=option))
+        )
+        ex = fiber.exit
+        assert isinstance(ex, Success)
+        child = ex.value.exit
+        assert isinstance(child, Success)
+        return child.value
+
+    assert (masks(False), masks("inherit"), masks(True)) == (True, False, False)
+
+
+async def test_source_fork_in_rechecks_the_scope_after_an_immediate_start():
+    """forkIn :5731-5733 reads the scope state again after forkUnsafe: a child that closed the
+    scope during its immediate start is not registered; it is interrupted by the parent's id."""
+
+    @gen
+    def program():
+        parent = yield from fiber_id
+        scope = yield from Scope.make()
+        child = Scope.close(scope, Success(None)).flat_map(lambda _: never)
+        fiber = yield from fork_in(child, scope, start_immediately=True)
+        return parent, scope, fiber
+
+    parent, scope, fiber = await within(run(program()))
+    assert isinstance(scope.state, Closed)
+    assert interrupters(fiber.exit) == [parent]
+
+
+async def test_source_parent_is_cleared_before_exit_observers_run():
+    """FiberImpl.evaluate :650-660: `_parent` is cleared after `_exit` is set and before the
+    observers are called, so an observer already sees no parent."""
+    seen: list[object] = []
+
+    @gen
+    def program():
+        child = yield from fork(never, start_immediately=True)
+        child.add_observer(lambda _: seen.append(child.parent))
+        yield from child.interrupt()
+
+    await within(run(program()))
+    assert seen == [None]
+
+
 # -- seams ManagedRuntime.disposeEffect needs (ManagedRuntime.ts:402-407) ----------------------
 
 
 async def test_source_remove_finalizer_unsafe_detaches_a_run_in_registration():
-    """scopeRemoveFinalizerUnsafe :4162-4176, as disposeEffect exempts the disposing fiber."""
+    """scopeRemoveFinalizerUnsafe :4159-4172, as disposeEffect exempts the disposing fiber."""
     scope = Scope.make_unsafe("parallel")
     fiber = run_fork(never)
     run_in(fiber, scope)

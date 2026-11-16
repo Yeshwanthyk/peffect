@@ -3,6 +3,7 @@
 // lifecycle events. Source-derived application reference, not an upstream test port.
 import { Deferred, Effect, Fiber, Layer } from "effect"
 import effectPackage from "effect/package.json" with { type: "json" }
+import { batchScenarios } from "./batch_scenarios.ts"
 import { composedScenarios } from "./composed_scenarios.ts"
 import { outcomeOf } from "./outcomes.ts"
 import {
@@ -71,7 +72,7 @@ const results = [
   await scenario("cancellation_after_acquire", cancellation)
 ]
 
-for (const [name, program] of composedScenarios) results.push(await scenario(name, program))
+for (const [name, program] of [...composedScenarios, ...batchScenarios]) results.push(await scenario(name, program))
 
 console.log(JSON.stringify(
   {

@@ -10,11 +10,12 @@ Effect v4: Context.ts (Service, Reference), internal/effect.ts:2379-2397 (provid
 from __future__ import annotations
 
 import math
-from collections.abc import Generator, Mapping
+from collections.abc import Callable, Generator, Mapping
 from types import MappingProxyType
 from typing import Any, ClassVar, Generic, Never, Self, TypeVar, cast, final, overload
 
 from .core import ContextMap, Effect, WithFiber, die, succeed, update_context
+from .fiber import Fiber, RootRunner, SchedulerService
 
 T_contra = TypeVar("T_contra", contravariant=True)
 
@@ -226,3 +227,32 @@ class provide[T]:
     def __call__(self, eff: Effect[Any, Any, Any]) -> Effect[Any, Any, Any]:
         services = self.ctx.services
         return update_context(eff, lambda old: {**old, **services})
+
+
+@final
+class run_fork_with[R]:
+    """Start roots with requirements supplied by this Context (effect.ts:5773-5777).
+
+    R is fixed by construction, so calling the runner cannot infer away a missing service.
+    The raw-map runner stays in the kernel; callers use this typed boundary.
+    """
+
+    __slots__ = ("_ctx",)
+
+    def __init__(self, ctx: Context[R]) -> None:
+        self._ctx = ctx
+
+    def __call__[A, E](
+        self,
+        eff: Effect[A, E, R],
+        *,
+        scheduler: SchedulerService | None = None,
+        uninterruptible: bool = False,
+        on_fiber_start: Callable[[Fiber[Any, Any]], object] | None = None,
+    ) -> Fiber[A, E]:
+        return RootRunner(self._ctx.services)(
+            eff,
+            scheduler=scheduler,
+            uninterruptible=uninterruptible,
+            on_fiber_start=on_fiber_start,
+        )

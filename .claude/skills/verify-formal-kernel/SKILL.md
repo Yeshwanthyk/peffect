@@ -32,7 +32,33 @@ Why the model's pass still means something with them added (an argument, not a c
 nor holds back an interrupt, and the model's "the interrupt unwinds to the top" still describes
 the code.
 
-**Sync:** 2026-11-15, scheduler unit: resume, interrupt of a fiber that is not running, and
+**Sync:** 2026-11-16, composition/dispatcher correction: no model change. OnExit receives the
+running fiber; its mask and cause combination are unchanged. The author measured 2232 states,
+depth 21, 24 linked tests passing and all seven break configurations exiting 1. A scratch
+no-mask mutation fails linked runtime tests. GenFrame cause composition and coordination
+protocols remain outside the model; independent review exercised their runtime regressions.
+
+Previous Sync, 2026-11-15, ManagedRuntime unit: no model change. `run_exit`'s wait moved unchanged
+into `await_exit(fiber)` (one observer, `asyncio.shield`, interrupt then wait on cancel), and
+`run_exit` is `_start` then `await_exit`, so `Init` still evaluates the root at once. `Fiber`
+gained a `__weakref__` slot; it is not a modeled field. 2232 states, depth 21, every configured
+rule holds; every `Break_*.cfg` is red. The scratch `_done` break makes three linked tests fail
+through `run.sh`; `fiber.py`'s hash was unchanged. Repeated asyncio cancellation and runtime
+disposal are proven by `tests/test_managed_runtime_upstream.py` and
+`tests/test_managed_runtime_interleavings.py`, not here.
+
+Previous Sync, 2026-11-15, lifecycle unit (`run_fork`, `run_in`, `fork_in`, `Fiber.parent`): no model
+change. `_publish` now also clears `_parent` before observers run (:652-655); `_parent` is not a
+modeled field and the `children` write was already there. A `run_fork` root installs its mask
+before its first `evaluate`, which `Init` already explores both ways. `fork_in` forks a daemon
+(a parentless child, not modeled) or, on a closed scope, interrupts an unstarted fiber, the
+atomic publish `IntUnsafe` already describes. 2232 states, depth 21, every configured rule
+holds; every `Break_*.cfg` is red. The scratch `_done` break (`if not live:` forced true in a
+temp copy put first on `PYTHONPATH`) makes three linked tests fail through `run.sh`;
+`fiber.py`'s hash was unchanged. Scope bookkeeping and the hook are proven by
+`tests/test_fiber_lifecycle_upstream.py`, not here.
+
+Previous Sync, 2026-11-15, scheduler unit: resume, interrupt of a fiber that is not running, and
 root start are synchronous nested `evaluate` calls (internal/effect.ts:590-611, :1220-1226,
 :5777); `yield_now` parks on a queued step that an interrupt can claim first (:773-781);
 scheduled starts go on the forker's dispatcher (:5629-5633). Wakers (`ExtResume`, `Interrupt`,

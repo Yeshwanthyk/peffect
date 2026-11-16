@@ -12,6 +12,7 @@ from peffect import (
     Exit,
     Fiber,
     Layer,
+    ManagedRuntime,
     MemoMap,
     Reference,
     Scope,
@@ -34,6 +35,7 @@ from peffect import (
     succeed,
     sync,
 )
+from peffect.option import Option, Some
 from peffect.scheduler import MaxOpsBeforeYield, MixedScheduler, SchedulerService, with_dispatcher
 
 
@@ -417,3 +419,133 @@ async def parity_application_mistakes(
     Layer.succeed(composed.Payments, composed.PaymentsService(
         lambda _: fail(composed.OutOfStock("book"))
     ))
+
+def lifecycle_mistakes() -> None:
+    owner = Scope.make_unsafe()
+    # 84. ROOT_MISSING_SERVICE: roots must have every requirement supplied
+    peffect.run_fork(Users().use())
+    # 85. ROOT_CONTEXT_MISSING_SERVICE: supplied Users cannot satisfy Log
+    peffect.run_fork_with(Users.context(Repo()))(Log().use())
+    # 86. FORK_SCOPE_MASK: only bool or inherit is supported
+    peffect.fork_in(succeed(1), owner, uninterruptible="masked")
+    # 87. FORK_SCOPE_RETAINS_R: attaching a scope does not provide services
+    _lost: Effect[Fiber[Repo, Never], Never, Never] = peffect.fork_in(Users().use(), owner)
+    # 88. ROOT_HOOK_SIGNATURE: the hook receives the started fiber
+    peffect.run_fork(succeed(1), on_fiber_start=lambda: None)
+
+
+def managed_runtime_mistakes(
+    users_rt: ManagedRuntime[Users, Never], wide: ManagedRuntime[Users, LookupError]
+) -> None:
+    # 89. MANAGED_RUNTIME_MISSING_SERVICE: the runtime provides Users, not Log
+    users_rt.run_fork(Log().use())
+    # 90. MANAGED_RUNTIME_R_NOT_COVARIANT: a runtime without Log cannot stand in for one with it
+    _more: ManagedRuntime[Users | Log, Never] = users_rt
+    # 91. MANAGED_RUNTIME_ER_NOT_CONTRAVARIANT: a build error cannot narrow
+    _narrow: ManagedRuntime[Users, KeyError] = wide
+    # 92. MANAGED_RUNTIME_LAYER_INPUT: the layer's own requirements must already be provided
+    ManagedRuntime.make(Layer.effect(Users, Log().use().as_(Repo())))
+    # 93. MANAGED_RUNTIME_READ_ONLY_CACHE: only the runtime writes its cached context
+    users_rt.cached_context = None
+
+
+class ComposeBoom(Exception): ...
+
+
+class ComposeOther(Exception): ...
+
+
+class ComposeA(Tag[str], key="snip/A"): ...
+
+
+class ComposeB(Tag[int], key="snip/B"): ...
+
+
+def composition_mistakes(p: Effect[int, ComposeBoom, ComposeA]) -> None:
+    # 94. TAP_NOT_AN_EFFECT: tap's function must return an Effect
+    p.tap(lambda a: a + 1)
+    # 95. TAP_WRONG_VALUE: tap's function receives the success value, here an int
+    p.tap(lambda a: a.upper())
+    # 96. TAP_NOT_CALLABLE_OR_EFFECT: a plain value is neither form of tap
+    p.tap(1)
+    # 97. TAP_ERROR_LOST: a failing tap widens E
+    _e: Effect[int, ComposeBoom, ComposeA] = p.tap(lambda _: fail(ComposeOther()))
+    # 98. TAP_REQUIREMENT_LOST: a tapped effect's services widen R
+    _r: Effect[int, ComposeBoom, ComposeA] = p.tap(lambda _: ComposeB().use())
+    # 99. PIPE_STEP_MISMATCH: each step receives the previous step's output (str, not int)
+    p.pipe(lambda e: e.map(str), lambda e: e.map(lambda s: s + 1))
+    # 100. PIPE_TOO_LONG: 21 steps exceed the 20 overloads (upstream's cap); nest a second pipe
+    p.pipe(
+        lambda e: e,
+        lambda e: e,
+        lambda e: e,
+        lambda e: e,
+        lambda e: e,
+        lambda e: e,
+        lambda e: e,
+        lambda e: e,
+        lambda e: e,
+        lambda e: e,
+        lambda e: e,
+        lambda e: e,
+        lambda e: e,
+        lambda e: e,
+        lambda e: e,
+        lambda e: e,
+        lambda e: e,
+        lambda e: e,
+        lambda e: e,
+        lambda e: e,
+        lambda e: e,
+    )
+
+
+def option_mistakes(s: Some[object], o: Option[object], i: Some[int]) -> None:
+    # 101. SOME_UNSAFE_NARROWING
+    _s: Some[int] = s
+    # 102. OPTION_UNSAFE_NARROWING
+    _o: Option[int] = o
+    # 103. SOME_IMMUTABLE
+    i.value = 2
+
+
+class PipeLayerA(Tag[str], key="snip/PipeLayerA"): ...
+
+
+class PipeLayerC(Tag[float], key="snip/PipeLayerC"): ...
+
+
+type PipeLayerType = Layer[PipeLayerA, Never, Never]
+
+
+def layer_identity(layer: PipeLayerType) -> PipeLayerType:
+    return layer
+
+
+def layer_pipe_mistakes(base: PipeLayerType) -> None:
+    # 104. LAYER_PIPE_STEP_MISMATCH: each step receives the previous step's output
+    base.pipe(lambda layer: len(str(layer)), lambda n: n.upper())
+    # 105. LAYER_PIPE_TOO_LONG: 21 steps exceed the 20 overloads, as for Effect.pipe
+    base.pipe(
+        layer_identity,
+        layer_identity,
+        layer_identity,
+        layer_identity,
+        layer_identity,
+        layer_identity,
+        layer_identity,
+        layer_identity,
+        layer_identity,
+        layer_identity,
+        layer_identity,
+        layer_identity,
+        layer_identity,
+        layer_identity,
+        layer_identity,
+        layer_identity,
+        layer_identity,
+        layer_identity,
+        layer_identity,
+        layer_identity,
+        layer_identity,
+    )

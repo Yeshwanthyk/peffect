@@ -30,6 +30,7 @@ from .core import (
     Exit,
     Failure,
     Success,
+    WithFiber,
     exit_,
     gen,
     on_exit,
@@ -39,7 +40,7 @@ from .core import (
     uninterruptible,
     update_context,
 )
-from .fiber import Fiber, await_all, fork_daemon
+from .fiber import Fiber, await_all, fork_daemon, fork_in_owner, run_in_owner
 
 type Strategy = Literal["sequential", "parallel"]
 type Finalizer = Callable[[Exit[Any, Any]], Effect[Any, Never, Never]]
@@ -142,7 +143,7 @@ def _add_finalizer_unsafe(scope: ScopeService, key: object, finalizer: Finalizer
 
 
 def _remove_finalizer_unsafe(scope: ScopeService, key: object) -> None:
-    """scopeRemoveFinalizerUnsafe, :4162-4176."""
+    """scopeRemoveFinalizerUnsafe, :4159-4172."""
     state = scope.state
     if not isinstance(state, Open):
         return
@@ -177,15 +178,16 @@ def _close_finalizers(
     strategy: Strategy, finalizers: dict[object, Finalizer], closed_with: Exit[Any, Any]
 ) -> Generator[Effect[Any, Never, Never], Any]:
     """scopeCloseFinalizers, :4077-4101: newest first. Sequential runs each to its Exit in turn;
-    parallel starts each in a daemon fiber with the closing fiber's mask, then awaits them all.
-    Upstream also skips a finalizer keyed by the closing fiber (forkIn); none exists here yet."""
+    parallel starts each in a daemon fiber with the closing fiber's mask, then awaits them all,
+    skipping the closing fiber's own `run_in`/`fork_in` finalizer, which would wait for itself."""
     exits: list[Exit[Any, Never]] = []
     fibers: list[Fiber[Any, Never]] = []
-    for finalizer in reversed(list(finalizers.values())):
+    closing: Fiber[Any, Any] = yield from WithFiber(_succeed_with)
+    for key, finalizer in reversed(list(finalizers.items())):
         if strategy == "sequential":
             ex: Exit[Any, Never] = yield from exit_(_run_finalizer(finalizer, closed_with))
             exits.append(ex)
-        else:
+        elif key is not closing:
             fiber: Fiber[Any, Never] = yield from fork_daemon(
                 _run_finalizer(finalizer, closed_with),
                 start_immediately=True,
@@ -195,6 +197,35 @@ def _close_finalizers(
     if fibers:
         exits = yield from await_all(fibers)
     yield from _as_void_all(exits)
+
+
+def _succeed_with[T](value: T) -> Effect[T, Never, Never]:
+    return succeed(value)
+
+
+def _fiber_finalizer(fiber: Fiber[Any, Any]) -> Finalizer:
+    """fiberScopeFinalizer, :5690-5693: interrupt and await the fiber, unless it is the one
+    running the close."""
+    return lambda _: WithFiber(lambda current: VOID if current is fiber else fiber.interrupt())
+
+
+@final
+class _ScopeOwner:
+    """The kernel's FiberOwner over a Scope: the fiber's finalizer is keyed by the fiber."""
+
+    __slots__ = ("_scope",)
+
+    def __init__(self, scope: ScopeService) -> None:
+        self._scope: Final = scope
+
+    def is_closed(self) -> bool:
+        return isinstance(self._scope.state, Closed)
+
+    def attach(self, fiber: Fiber[Any, Any]) -> None:
+        _add_finalizer_unsafe(self._scope, fiber, _fiber_finalizer(fiber))
+
+    def detach(self, fiber: Fiber[Any, Any]) -> None:
+        _remove_finalizer_unsafe(self._scope, fiber)
 
 
 def _void_if_none(eff: Effect[Any, Never, Never] | None) -> Effect[Any, Never, Never]:
@@ -226,6 +257,11 @@ class Scope(Tag[ScopeService], key="effect/Scope"):  # internal/effect.ts:4030
         internal scopeAddFinalizerUnsafe (:4143-4159), rather than late-add execution.
         """
         _add_finalizer_unsafe(scope, key, finalizer)
+
+    @staticmethod
+    def remove_finalizer_unsafe(scope: ScopeService, key: object) -> None:
+        """scopeRemoveFinalizerUnsafe (:4159-4172): drop the finalizer added under ``key``."""
+        _remove_finalizer_unsafe(scope, key)
 
     @staticmethod
     def add_finalizer_exit(scope: ScopeService, finalizer: Finalizer) -> Effect[None, Never, Never]:
@@ -292,6 +328,29 @@ class Scope(Tag[ScopeService], key="effect/Scope"):  # internal/effect.ts:4030
     def provide(scope: ScopeService) -> provide[Scope]:
         """provideScope: run an effect with this scope as its Scope service."""
         return provide(Scope.context(scope))
+
+
+def run_in[A, E](fiber: Fiber[A, E], scope: ScopeService) -> Fiber[A, E]:
+    """Fiber.runIn: interrupt ``fiber`` when ``scope`` closes (at once if it has), and return
+    it. Registering again makes it the newest finalizer. Does not wait for the fiber."""
+    return run_in_owner(fiber, _ScopeOwner(scope))
+
+
+def fork_in[A, E, R](
+    eff: Effect[A, E, R],
+    scope: ScopeService,
+    *,
+    start_immediately: bool = False,
+    uninterruptible: bool | Literal["inherit"] = False,
+) -> Effect[Fiber[A, E], Never, R]:
+    """Effect.forkIn: run ``eff`` in a daemon fiber that ``scope`` interrupts when it closes.
+    On a closed scope the work never runs and the fiber is interrupted."""
+    return fork_in_owner(
+        eff,
+        _ScopeOwner(scope),
+        start_immediately=start_immediately,
+        uninterruptible=uninterruptible,
+    )
 
 
 scope: Effect[ScopeService, Never, Scope] = Scope().use()

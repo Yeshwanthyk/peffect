@@ -27,6 +27,7 @@ from .deferred import Deferred
 from .fiber import for_each
 from .scope import Closeable, Scope, ScopeService
 
+type _F[X, Y] = Callable[[X], Y]
 type _Build[ROut, E, RIn] = Callable[[MemoMap, ScopeService], Effect[Context[ROut], E, RIn]]
 
 VOID: Effect[None, Never, Never] = succeed(None)
@@ -57,8 +58,338 @@ class Layer[ROut, E = Never, RIn = Never]:
             raise TypeError("build a Layer with Layer.effect, Layer.succeed, ..., not Layer(...)")
         self._builder: Final = builder
 
-    def pipe[B](self, f: Callable[[Layer[ROut, E, RIn]], B], /) -> B:
-        return f(self)
+    # pipe(f1, ..., fn): 0-20 steps, left to right, like Effect.pipe (Layer is Pipeable,
+    # Pipeable.ts:46-526); nest a second pipe for more.
+    @overload
+    def pipe(self, /) -> Layer[ROut, E, RIn]: ...
+    @overload
+    def pipe[T1](self, f1: _F[Layer[ROut, E, RIn], T1], /) -> T1: ...
+    @overload
+    def pipe[T1, T2](self, f1: _F[Layer[ROut, E, RIn], T1], f2: _F[T1, T2], /) -> T2: ...
+    @overload
+    def pipe[T1, T2, T3](
+        self,
+        f1: _F[Layer[ROut, E, RIn], T1],
+        f2: _F[T1, T2],
+        f3: _F[T2, T3],
+        /,
+    ) -> T3: ...
+    @overload
+    def pipe[T1, T2, T3, T4](
+        self,
+        f1: _F[Layer[ROut, E, RIn], T1],
+        f2: _F[T1, T2],
+        f3: _F[T2, T3],
+        f4: _F[T3, T4],
+        /,
+    ) -> T4: ...
+    @overload
+    def pipe[T1, T2, T3, T4, T5](
+        self,
+        f1: _F[Layer[ROut, E, RIn], T1],
+        f2: _F[T1, T2],
+        f3: _F[T2, T3],
+        f4: _F[T3, T4],
+        f5: _F[T4, T5],
+        /,
+    ) -> T5: ...
+    @overload
+    def pipe[T1, T2, T3, T4, T5, T6](
+        self,
+        f1: _F[Layer[ROut, E, RIn], T1],
+        f2: _F[T1, T2],
+        f3: _F[T2, T3],
+        f4: _F[T3, T4],
+        f5: _F[T4, T5],
+        f6: _F[T5, T6],
+        /,
+    ) -> T6: ...
+    @overload
+    def pipe[T1, T2, T3, T4, T5, T6, T7](
+        self,
+        f1: _F[Layer[ROut, E, RIn], T1],
+        f2: _F[T1, T2],
+        f3: _F[T2, T3],
+        f4: _F[T3, T4],
+        f5: _F[T4, T5],
+        f6: _F[T5, T6],
+        f7: _F[T6, T7],
+        /,
+    ) -> T7: ...
+    @overload
+    def pipe[T1, T2, T3, T4, T5, T6, T7, T8](
+        self,
+        f1: _F[Layer[ROut, E, RIn], T1],
+        f2: _F[T1, T2],
+        f3: _F[T2, T3],
+        f4: _F[T3, T4],
+        f5: _F[T4, T5],
+        f6: _F[T5, T6],
+        f7: _F[T6, T7],
+        f8: _F[T7, T8],
+        /,
+    ) -> T8: ...
+    @overload
+    def pipe[T1, T2, T3, T4, T5, T6, T7, T8, T9](
+        self,
+        f1: _F[Layer[ROut, E, RIn], T1],
+        f2: _F[T1, T2],
+        f3: _F[T2, T3],
+        f4: _F[T3, T4],
+        f5: _F[T4, T5],
+        f6: _F[T5, T6],
+        f7: _F[T6, T7],
+        f8: _F[T7, T8],
+        f9: _F[T8, T9],
+        /,
+    ) -> T9: ...
+    @overload
+    def pipe[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10](
+        self,
+        f1: _F[Layer[ROut, E, RIn], T1],
+        f2: _F[T1, T2],
+        f3: _F[T2, T3],
+        f4: _F[T3, T4],
+        f5: _F[T4, T5],
+        f6: _F[T5, T6],
+        f7: _F[T6, T7],
+        f8: _F[T7, T8],
+        f9: _F[T8, T9],
+        f10: _F[T9, T10],
+        /,
+    ) -> T10: ...
+    @overload
+    def pipe[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11](
+        self,
+        f1: _F[Layer[ROut, E, RIn], T1],
+        f2: _F[T1, T2],
+        f3: _F[T2, T3],
+        f4: _F[T3, T4],
+        f5: _F[T4, T5],
+        f6: _F[T5, T6],
+        f7: _F[T6, T7],
+        f8: _F[T7, T8],
+        f9: _F[T8, T9],
+        f10: _F[T9, T10],
+        f11: _F[T10, T11],
+        /,
+    ) -> T11: ...
+    @overload
+    def pipe[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12](
+        self,
+        f1: _F[Layer[ROut, E, RIn], T1],
+        f2: _F[T1, T2],
+        f3: _F[T2, T3],
+        f4: _F[T3, T4],
+        f5: _F[T4, T5],
+        f6: _F[T5, T6],
+        f7: _F[T6, T7],
+        f8: _F[T7, T8],
+        f9: _F[T8, T9],
+        f10: _F[T9, T10],
+        f11: _F[T10, T11],
+        f12: _F[T11, T12],
+        /,
+    ) -> T12: ...
+    @overload
+    def pipe[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13](
+        self,
+        f1: _F[Layer[ROut, E, RIn], T1],
+        f2: _F[T1, T2],
+        f3: _F[T2, T3],
+        f4: _F[T3, T4],
+        f5: _F[T4, T5],
+        f6: _F[T5, T6],
+        f7: _F[T6, T7],
+        f8: _F[T7, T8],
+        f9: _F[T8, T9],
+        f10: _F[T9, T10],
+        f11: _F[T10, T11],
+        f12: _F[T11, T12],
+        f13: _F[T12, T13],
+        /,
+    ) -> T13: ...
+    @overload
+    def pipe[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14](
+        self,
+        f1: _F[Layer[ROut, E, RIn], T1],
+        f2: _F[T1, T2],
+        f3: _F[T2, T3],
+        f4: _F[T3, T4],
+        f5: _F[T4, T5],
+        f6: _F[T5, T6],
+        f7: _F[T6, T7],
+        f8: _F[T7, T8],
+        f9: _F[T8, T9],
+        f10: _F[T9, T10],
+        f11: _F[T10, T11],
+        f12: _F[T11, T12],
+        f13: _F[T12, T13],
+        f14: _F[T13, T14],
+        /,
+    ) -> T14: ...
+    @overload
+    def pipe[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15](
+        self,
+        f1: _F[Layer[ROut, E, RIn], T1],
+        f2: _F[T1, T2],
+        f3: _F[T2, T3],
+        f4: _F[T3, T4],
+        f5: _F[T4, T5],
+        f6: _F[T5, T6],
+        f7: _F[T6, T7],
+        f8: _F[T7, T8],
+        f9: _F[T8, T9],
+        f10: _F[T9, T10],
+        f11: _F[T10, T11],
+        f12: _F[T11, T12],
+        f13: _F[T12, T13],
+        f14: _F[T13, T14],
+        f15: _F[T14, T15],
+        /,
+    ) -> T15: ...
+    @overload
+    def pipe[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16](
+        self,
+        f1: _F[Layer[ROut, E, RIn], T1],
+        f2: _F[T1, T2],
+        f3: _F[T2, T3],
+        f4: _F[T3, T4],
+        f5: _F[T4, T5],
+        f6: _F[T5, T6],
+        f7: _F[T6, T7],
+        f8: _F[T7, T8],
+        f9: _F[T8, T9],
+        f10: _F[T9, T10],
+        f11: _F[T10, T11],
+        f12: _F[T11, T12],
+        f13: _F[T12, T13],
+        f14: _F[T13, T14],
+        f15: _F[T14, T15],
+        f16: _F[T15, T16],
+        /,
+    ) -> T16: ...
+    @overload
+    def pipe[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17](
+        self,
+        f1: _F[Layer[ROut, E, RIn], T1],
+        f2: _F[T1, T2],
+        f3: _F[T2, T3],
+        f4: _F[T3, T4],
+        f5: _F[T4, T5],
+        f6: _F[T5, T6],
+        f7: _F[T6, T7],
+        f8: _F[T7, T8],
+        f9: _F[T8, T9],
+        f10: _F[T9, T10],
+        f11: _F[T10, T11],
+        f12: _F[T11, T12],
+        f13: _F[T12, T13],
+        f14: _F[T13, T14],
+        f15: _F[T14, T15],
+        f16: _F[T15, T16],
+        f17: _F[T16, T17],
+        /,
+    ) -> T17: ...
+    @overload
+    def pipe[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18](
+        self,
+        f1: _F[Layer[ROut, E, RIn], T1],
+        f2: _F[T1, T2],
+        f3: _F[T2, T3],
+        f4: _F[T3, T4],
+        f5: _F[T4, T5],
+        f6: _F[T5, T6],
+        f7: _F[T6, T7],
+        f8: _F[T7, T8],
+        f9: _F[T8, T9],
+        f10: _F[T9, T10],
+        f11: _F[T10, T11],
+        f12: _F[T11, T12],
+        f13: _F[T12, T13],
+        f14: _F[T13, T14],
+        f15: _F[T14, T15],
+        f16: _F[T15, T16],
+        f17: _F[T16, T17],
+        f18: _F[T17, T18],
+        /,
+    ) -> T18: ...
+    @overload
+    def pipe[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19](
+        self,
+        f1: _F[Layer[ROut, E, RIn], T1],
+        f2: _F[T1, T2],
+        f3: _F[T2, T3],
+        f4: _F[T3, T4],
+        f5: _F[T4, T5],
+        f6: _F[T5, T6],
+        f7: _F[T6, T7],
+        f8: _F[T7, T8],
+        f9: _F[T8, T9],
+        f10: _F[T9, T10],
+        f11: _F[T10, T11],
+        f12: _F[T11, T12],
+        f13: _F[T12, T13],
+        f14: _F[T13, T14],
+        f15: _F[T14, T15],
+        f16: _F[T15, T16],
+        f17: _F[T16, T17],
+        f18: _F[T17, T18],
+        f19: _F[T18, T19],
+        /,
+    ) -> T19: ...
+    @overload
+    def pipe[
+        T1,
+        T2,
+        T3,
+        T4,
+        T5,
+        T6,
+        T7,
+        T8,
+        T9,
+        T10,
+        T11,
+        T12,
+        T13,
+        T14,
+        T15,
+        T16,
+        T17,
+        T18,
+        T19,
+        T20,
+    ](
+        self,
+        f1: _F[Layer[ROut, E, RIn], T1],
+        f2: _F[T1, T2],
+        f3: _F[T2, T3],
+        f4: _F[T3, T4],
+        f5: _F[T4, T5],
+        f6: _F[T5, T6],
+        f7: _F[T6, T7],
+        f8: _F[T7, T8],
+        f9: _F[T8, T9],
+        f10: _F[T9, T10],
+        f11: _F[T10, T11],
+        f12: _F[T11, T12],
+        f13: _F[T12, T13],
+        f14: _F[T13, T14],
+        f15: _F[T14, T15],
+        f16: _F[T15, T16],
+        f17: _F[T16, T17],
+        f18: _F[T17, T18],
+        f19: _F[T18, T19],
+        f20: _F[T19, T20],
+        /,
+    ) -> T20: ...
+    def pipe(self, /, *fs: _F[Any, Any]) -> Any:
+        """Apply each function to the previous result, eagerly (pipeArguments, Pipeable.ts:567)."""
+        out: Any = self
+        for f in fs:
+            out = f(out)
+        return out
 
     # -- constructors (Layer.ts:360-372, :1031-1180) -------------------------------------------
 

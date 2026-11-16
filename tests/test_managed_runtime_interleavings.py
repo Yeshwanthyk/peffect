@@ -47,7 +47,6 @@ from peffect import (
     ensuring,
     fork_daemon,
     gen,
-    managed_runtime,
     never,
     run_fork,
     run_fork_with,
@@ -56,8 +55,7 @@ from peffect import (
     yield_now,
 )
 from peffect.fiber import Task
-
-ManagedRuntime = managed_runtime.ManagedRuntime
+from peffect.managed_runtime import ManagedRuntime
 
 DISPOSED = "die:ManagedRuntime disposed"
 CLOSED = ["R cleanup", "released"]

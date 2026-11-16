@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Generic, Never, TypeVar, cast, 
 from peffect.cause import Cause, Interrupt
 
 if TYPE_CHECKING:
-    from peffect.fiber import Fiber
+    from peffect.fiber import Fiber, SchedulerDispatcher
 
 A_co = TypeVar("A_co", covariant=True)
 E_co = TypeVar("E_co", covariant=True)
@@ -42,6 +42,8 @@ R_co = TypeVar("R_co", covariant=True)
 
 type AnyEffect = Effect[Any, Any, Any]
 type AnyFiber = Fiber[Any, Any]
+type _F[X, Y] = Callable[[X], Y]
+"""One pipe step: what `Effect.pipe` and the pipeables take."""
 type ContextMap = Mapping[str, Any]
 """A fiber's services, keyed by tag key string. Read-only: update_context installs a fresh copy."""
 
@@ -60,8 +62,338 @@ class Effect(Generic[A_co, E_co, R_co]):
     def __iter__(self) -> Generator[Effect[A_co, E_co, R_co], Any, A_co]:
         return cast(A_co, (yield self))
 
-    def pipe[B](self, f: Callable[[Effect[A_co, E_co, R_co]], B], /) -> B:
-        return f(self)
+    # pipe(f1, ..., fn): each step gets the previous result, left to right. 0-20 steps, like
+    # upstream's Pipeable overloads (Pipeable.ts:46-526); nest a second pipe for more.
+    @overload
+    def pipe(self, /) -> Effect[A_co, E_co, R_co]: ...
+    @overload
+    def pipe[T1](self, f1: _F[Effect[A_co, E_co, R_co], T1], /) -> T1: ...
+    @overload
+    def pipe[T1, T2](self, f1: _F[Effect[A_co, E_co, R_co], T1], f2: _F[T1, T2], /) -> T2: ...
+    @overload
+    def pipe[T1, T2, T3](
+        self,
+        f1: _F[Effect[A_co, E_co, R_co], T1],
+        f2: _F[T1, T2],
+        f3: _F[T2, T3],
+        /,
+    ) -> T3: ...
+    @overload
+    def pipe[T1, T2, T3, T4](
+        self,
+        f1: _F[Effect[A_co, E_co, R_co], T1],
+        f2: _F[T1, T2],
+        f3: _F[T2, T3],
+        f4: _F[T3, T4],
+        /,
+    ) -> T4: ...
+    @overload
+    def pipe[T1, T2, T3, T4, T5](
+        self,
+        f1: _F[Effect[A_co, E_co, R_co], T1],
+        f2: _F[T1, T2],
+        f3: _F[T2, T3],
+        f4: _F[T3, T4],
+        f5: _F[T4, T5],
+        /,
+    ) -> T5: ...
+    @overload
+    def pipe[T1, T2, T3, T4, T5, T6](
+        self,
+        f1: _F[Effect[A_co, E_co, R_co], T1],
+        f2: _F[T1, T2],
+        f3: _F[T2, T3],
+        f4: _F[T3, T4],
+        f5: _F[T4, T5],
+        f6: _F[T5, T6],
+        /,
+    ) -> T6: ...
+    @overload
+    def pipe[T1, T2, T3, T4, T5, T6, T7](
+        self,
+        f1: _F[Effect[A_co, E_co, R_co], T1],
+        f2: _F[T1, T2],
+        f3: _F[T2, T3],
+        f4: _F[T3, T4],
+        f5: _F[T4, T5],
+        f6: _F[T5, T6],
+        f7: _F[T6, T7],
+        /,
+    ) -> T7: ...
+    @overload
+    def pipe[T1, T2, T3, T4, T5, T6, T7, T8](
+        self,
+        f1: _F[Effect[A_co, E_co, R_co], T1],
+        f2: _F[T1, T2],
+        f3: _F[T2, T3],
+        f4: _F[T3, T4],
+        f5: _F[T4, T5],
+        f6: _F[T5, T6],
+        f7: _F[T6, T7],
+        f8: _F[T7, T8],
+        /,
+    ) -> T8: ...
+    @overload
+    def pipe[T1, T2, T3, T4, T5, T6, T7, T8, T9](
+        self,
+        f1: _F[Effect[A_co, E_co, R_co], T1],
+        f2: _F[T1, T2],
+        f3: _F[T2, T3],
+        f4: _F[T3, T4],
+        f5: _F[T4, T5],
+        f6: _F[T5, T6],
+        f7: _F[T6, T7],
+        f8: _F[T7, T8],
+        f9: _F[T8, T9],
+        /,
+    ) -> T9: ...
+    @overload
+    def pipe[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10](
+        self,
+        f1: _F[Effect[A_co, E_co, R_co], T1],
+        f2: _F[T1, T2],
+        f3: _F[T2, T3],
+        f4: _F[T3, T4],
+        f5: _F[T4, T5],
+        f6: _F[T5, T6],
+        f7: _F[T6, T7],
+        f8: _F[T7, T8],
+        f9: _F[T8, T9],
+        f10: _F[T9, T10],
+        /,
+    ) -> T10: ...
+    @overload
+    def pipe[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11](
+        self,
+        f1: _F[Effect[A_co, E_co, R_co], T1],
+        f2: _F[T1, T2],
+        f3: _F[T2, T3],
+        f4: _F[T3, T4],
+        f5: _F[T4, T5],
+        f6: _F[T5, T6],
+        f7: _F[T6, T7],
+        f8: _F[T7, T8],
+        f9: _F[T8, T9],
+        f10: _F[T9, T10],
+        f11: _F[T10, T11],
+        /,
+    ) -> T11: ...
+    @overload
+    def pipe[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12](
+        self,
+        f1: _F[Effect[A_co, E_co, R_co], T1],
+        f2: _F[T1, T2],
+        f3: _F[T2, T3],
+        f4: _F[T3, T4],
+        f5: _F[T4, T5],
+        f6: _F[T5, T6],
+        f7: _F[T6, T7],
+        f8: _F[T7, T8],
+        f9: _F[T8, T9],
+        f10: _F[T9, T10],
+        f11: _F[T10, T11],
+        f12: _F[T11, T12],
+        /,
+    ) -> T12: ...
+    @overload
+    def pipe[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13](
+        self,
+        f1: _F[Effect[A_co, E_co, R_co], T1],
+        f2: _F[T1, T2],
+        f3: _F[T2, T3],
+        f4: _F[T3, T4],
+        f5: _F[T4, T5],
+        f6: _F[T5, T6],
+        f7: _F[T6, T7],
+        f8: _F[T7, T8],
+        f9: _F[T8, T9],
+        f10: _F[T9, T10],
+        f11: _F[T10, T11],
+        f12: _F[T11, T12],
+        f13: _F[T12, T13],
+        /,
+    ) -> T13: ...
+    @overload
+    def pipe[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14](
+        self,
+        f1: _F[Effect[A_co, E_co, R_co], T1],
+        f2: _F[T1, T2],
+        f3: _F[T2, T3],
+        f4: _F[T3, T4],
+        f5: _F[T4, T5],
+        f6: _F[T5, T6],
+        f7: _F[T6, T7],
+        f8: _F[T7, T8],
+        f9: _F[T8, T9],
+        f10: _F[T9, T10],
+        f11: _F[T10, T11],
+        f12: _F[T11, T12],
+        f13: _F[T12, T13],
+        f14: _F[T13, T14],
+        /,
+    ) -> T14: ...
+    @overload
+    def pipe[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15](
+        self,
+        f1: _F[Effect[A_co, E_co, R_co], T1],
+        f2: _F[T1, T2],
+        f3: _F[T2, T3],
+        f4: _F[T3, T4],
+        f5: _F[T4, T5],
+        f6: _F[T5, T6],
+        f7: _F[T6, T7],
+        f8: _F[T7, T8],
+        f9: _F[T8, T9],
+        f10: _F[T9, T10],
+        f11: _F[T10, T11],
+        f12: _F[T11, T12],
+        f13: _F[T12, T13],
+        f14: _F[T13, T14],
+        f15: _F[T14, T15],
+        /,
+    ) -> T15: ...
+    @overload
+    def pipe[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16](
+        self,
+        f1: _F[Effect[A_co, E_co, R_co], T1],
+        f2: _F[T1, T2],
+        f3: _F[T2, T3],
+        f4: _F[T3, T4],
+        f5: _F[T4, T5],
+        f6: _F[T5, T6],
+        f7: _F[T6, T7],
+        f8: _F[T7, T8],
+        f9: _F[T8, T9],
+        f10: _F[T9, T10],
+        f11: _F[T10, T11],
+        f12: _F[T11, T12],
+        f13: _F[T12, T13],
+        f14: _F[T13, T14],
+        f15: _F[T14, T15],
+        f16: _F[T15, T16],
+        /,
+    ) -> T16: ...
+    @overload
+    def pipe[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17](
+        self,
+        f1: _F[Effect[A_co, E_co, R_co], T1],
+        f2: _F[T1, T2],
+        f3: _F[T2, T3],
+        f4: _F[T3, T4],
+        f5: _F[T4, T5],
+        f6: _F[T5, T6],
+        f7: _F[T6, T7],
+        f8: _F[T7, T8],
+        f9: _F[T8, T9],
+        f10: _F[T9, T10],
+        f11: _F[T10, T11],
+        f12: _F[T11, T12],
+        f13: _F[T12, T13],
+        f14: _F[T13, T14],
+        f15: _F[T14, T15],
+        f16: _F[T15, T16],
+        f17: _F[T16, T17],
+        /,
+    ) -> T17: ...
+    @overload
+    def pipe[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18](
+        self,
+        f1: _F[Effect[A_co, E_co, R_co], T1],
+        f2: _F[T1, T2],
+        f3: _F[T2, T3],
+        f4: _F[T3, T4],
+        f5: _F[T4, T5],
+        f6: _F[T5, T6],
+        f7: _F[T6, T7],
+        f8: _F[T7, T8],
+        f9: _F[T8, T9],
+        f10: _F[T9, T10],
+        f11: _F[T10, T11],
+        f12: _F[T11, T12],
+        f13: _F[T12, T13],
+        f14: _F[T13, T14],
+        f15: _F[T14, T15],
+        f16: _F[T15, T16],
+        f17: _F[T16, T17],
+        f18: _F[T17, T18],
+        /,
+    ) -> T18: ...
+    @overload
+    def pipe[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19](
+        self,
+        f1: _F[Effect[A_co, E_co, R_co], T1],
+        f2: _F[T1, T2],
+        f3: _F[T2, T3],
+        f4: _F[T3, T4],
+        f5: _F[T4, T5],
+        f6: _F[T5, T6],
+        f7: _F[T6, T7],
+        f8: _F[T7, T8],
+        f9: _F[T8, T9],
+        f10: _F[T9, T10],
+        f11: _F[T10, T11],
+        f12: _F[T11, T12],
+        f13: _F[T12, T13],
+        f14: _F[T13, T14],
+        f15: _F[T14, T15],
+        f16: _F[T15, T16],
+        f17: _F[T16, T17],
+        f18: _F[T17, T18],
+        f19: _F[T18, T19],
+        /,
+    ) -> T19: ...
+    @overload
+    def pipe[
+        T1,
+        T2,
+        T3,
+        T4,
+        T5,
+        T6,
+        T7,
+        T8,
+        T9,
+        T10,
+        T11,
+        T12,
+        T13,
+        T14,
+        T15,
+        T16,
+        T17,
+        T18,
+        T19,
+        T20,
+    ](
+        self,
+        f1: _F[Effect[A_co, E_co, R_co], T1],
+        f2: _F[T1, T2],
+        f3: _F[T2, T3],
+        f4: _F[T3, T4],
+        f5: _F[T4, T5],
+        f6: _F[T5, T6],
+        f7: _F[T6, T7],
+        f8: _F[T7, T8],
+        f9: _F[T8, T9],
+        f10: _F[T9, T10],
+        f11: _F[T10, T11],
+        f12: _F[T11, T12],
+        f13: _F[T12, T13],
+        f14: _F[T13, T14],
+        f15: _F[T14, T15],
+        f16: _F[T15, T16],
+        f17: _F[T16, T17],
+        f18: _F[T17, T18],
+        f19: _F[T18, T19],
+        f20: _F[T19, T20],
+        /,
+    ) -> T20: ...
+    def pipe(self, /, *fs: _F[Any, Any]) -> Any:
+        """Apply each function to the previous result, eagerly (pipeArguments, Pipeable.ts:567)."""
+        out: Any = self
+        for f in fs:
+            out = f(out)
+        return out
 
     def map[B](self, f: Callable[[A_co], B]) -> Effect[B, E_co, R_co]:
         return OnSuccess(self, lambda a: Success(f(a)))
@@ -73,6 +405,13 @@ class Effect(Generic[A_co, E_co, R_co]):
 
     def as_[B](self, value: B) -> Effect[B, E_co, R_co]:
         return OnSuccess(self, lambda _: Success(value))
+
+    def tap[B, E2, R2](
+        self, f: Callable[[A_co], Effect[B, E2, R2]] | Effect[B, E2, R2]
+    ) -> Effect[A_co, E_co | E2, R_co | R2]:
+        """After success run ``f(a)``, or the effect ``f``, then succeed with ``a`` again; its
+        failure fails the whole (internal/effect.ts:1607-1613, :1654-1675)."""
+        return _tap(self, f)
 
     def catch_all[B, E2 = Never, R2 = Never](
         self, handler: Callable[[E_co], Effect[B, E2, R2]]
@@ -87,12 +426,12 @@ class Effect(Generic[A_co, E_co, R_co]):
     def on_exit[E2 = Never, R2 = Never](
         self, f: Callable[[Exit[A_co, E_co]], Effect[Any, E2, R2]]
     ) -> Effect[A_co, E_co | E2, R_co | R2]:
-        return OnExit(self, f)
+        return OnExit.of(self, f)
 
     def ensuring[R2 = Never](
         self, finalizer: Effect[Any, Never, R2]
     ) -> Effect[A_co, E_co, R_co | R2]:
-        return OnExit(self, lambda _exit: finalizer)
+        return OnExit.of(self, lambda _exit: finalizer)
 
 
 # ================================================================================================
@@ -357,18 +696,27 @@ def _mask_while_popping(fiber: AnyFiber) -> None:
 
 @final
 class OnExit(Effect[A_co, E_co, R_co], Frame):
-    """Run ``f(exit)`` after ``eff`` however it ends, uninterruptibly, then re-emit the exit.
+    """Run ``f(exit, fiber)`` after ``eff`` however it ends, uninterruptibly, then re-emit the exit.
 
     on_any masks the fiber as the frame is popped. That is what stops Failure's skip-loop from
-    skipping this frame when the fiber is being interrupted. Effect v4: internal/effect.ts:4270-4302
+    skipping this frame when the fiber is being interrupted. ``f`` returns the finalizer effect,
+    or None when its work is already done (upstream's ``| undefined``). It gets the fiber for
+    on_exit_with_dispatcher; everything else builds through OnExit.of.
+    Effect v4: internal/effect.ts:4270-4319
     """
 
     __slots__ = ("eff", "f")
     kind = OK | ERR | ANY
 
-    def __init__(self, eff: AnyEffect, f: Callable[[Exit[Any, Any]], AnyEffect]) -> None:
+    def __init__(
+        self, eff: AnyEffect, f: Callable[[Exit[Any, Any], AnyFiber], AnyEffect | None]
+    ) -> None:
         self.eff = eff
         self.f = f
+
+    @staticmethod
+    def of(eff: AnyEffect, f: Callable[[Exit[Any, Any]], AnyEffect]) -> OnExit[Any, Any, Any]:
+        return OnExit(eff, lambda exit_, _fiber: f(exit_))
 
     def _eval(self, fiber: AnyFiber) -> AnyEffect | None:
         fiber.stack.append(self)
@@ -378,24 +726,41 @@ class OnExit(Effect[A_co, E_co, R_co], Frame):
         _mask_while_popping(fiber)
         return None
 
-    def _finalizer(self, exit_: Exit[Any, Any]) -> AnyEffect:
+    def _finalizer(self, exit_: Exit[Any, Any], fiber: AnyFiber) -> AnyEffect | None:
         try:
-            return self.f(exit_)
-        except Exception as e:  # f raised instead of returning an effect: a defect of the finalizer
+            return self.f(exit_, fiber)
+        except Exception as e:  # f raised instead of returning: a defect of the finalizer
             return Failure(Cause.die(e))
 
     def on_ok(self, value: Any, fiber: AnyFiber) -> AnyEffect | None:
         exit_ = Success(value)
-        return OnSuccess(self._finalizer(exit_), lambda _: exit_)
+        fin = self._finalizer(exit_, fiber)
+        return exit_ if fin is None else OnSuccess(fin, lambda _: exit_)
 
     def on_err(self, cause: Cause[Any], fiber: AnyFiber) -> AnyEffect | None:
         exit_: Failure[Any] = Failure(cause)
+        fin = self._finalizer(exit_, fiber)
+        if fin is None:
+            return exit_
         # a failing finalizer adds its cause to the original, then defects are elected
         # (combineFinalizerCause, internal/effect.ts:4069-4075)
-        fin: AnyEffect = OnFailure(
-            self._finalizer(exit_), lambda c2: Failure((cause + c2).elect_defects())
-        )
-        return OnSuccess(fin, lambda _: exit_)
+        combined: AnyEffect = OnFailure(fin, lambda c2: Failure((cause + c2).elect_defects()))
+        return OnSuccess(combined, lambda _: exit_)
+
+
+def on_exit_with_dispatcher[A, E, R](
+    eff: Effect[A, E, R], f: Callable[[Exit[A, E], SchedulerDispatcher], None]
+) -> Effect[A, E, R]:
+    """Run the synchronous ``f(exit, dispatcher)`` as the frame pops, masked, with the running
+    fiber's dispatcher: upstream onExitPrimitive with a callback that returns undefined and reads
+    getCurrentFiber() (internal/effect.ts:4270-4319; Semaphore.ts:365-368). Work ``f`` queues on
+    the dispatcher is published in the same step as its state changes. A raising ``f`` is a
+    defect, combined like any failing finalizer (OnExit)."""
+
+    def run(exit_: Exit[Any, Any], fiber: AnyFiber) -> None:
+        f(exit_, fiber.current_dispatcher)
+
+    return OnExit(eff, run)
 
 
 @final
@@ -469,7 +834,11 @@ class GenFrame(Effect[Any, Any, Any], Frame):
     """Drives a generator: send each success in, run whatever it yields next.
 
     A failure never re-enters the generator (no .throw(), like Effect v4 internal/effect.ts:1487).
-    We .close() it so its ``finally`` blocks run now rather than at garbage collection.
+    Python adaptation: upstream never closes the iterator, so a JS ``finally`` doesn't run on
+    failure. We .close() it so ``finally`` blocks run now rather than at garbage collection. If
+    that cleanup raises (or yields: Python then raises RuntimeError), the original cause is kept
+    and the error is added as a defect, the rule for a failing finalizer (combineFinalizerCause,
+    :4069-4075); see _CloseFailed and tests/test_gen_cleanup.py.
     """
 
     __slots__ = ("gen",)
@@ -498,8 +867,28 @@ class GenFrame(Effect[Any, Any, Any], Frame):
 
     def on_any(self, fiber: AnyFiber, ok: bool) -> AnyEffect | None:
         if not ok:
-            self.gen.close()
+            try:
+                self.gen.close()
+            except Exception as e:  # the body's cleanup failed: handled next, masked like OnExit
+                _mask_while_popping(fiber)
+                fiber.stack.append(_CloseFailed(e))
         return None
+
+
+@final
+class _CloseFailed(Frame):
+    """Pushed by GenFrame.on_any while a failure pops it, and popped straight after by the same
+    _pop: the failure that closed the generator, plus the cleanup's defect, defects elected.
+    GenFrame's mask stops Failure's interrupt skip-loop here, so an Interrupt is kept too."""
+
+    __slots__ = ("defect",)
+    kind = ERR
+
+    def __init__(self, defect: Exception) -> None:
+        self.defect = defect
+
+    def on_err(self, cause: Cause[Any], fiber: AnyFiber) -> AnyEffect | None:
+        return Failure((cause + Cause.die(self.defect)).elect_defects())
 
 
 # ================================================================================================
@@ -770,7 +1159,7 @@ class on_exit[R2 = Never, E2 = Never]:
         self.f = f
 
     def __call__[A, E, R](self, eff: Effect[A, E, R]) -> Effect[A, E | E2, R | R2]:
-        return OnExit(eff, self.f)
+        return OnExit.of(eff, self.f)
 
 
 def ensuring[R2](finalizer: Effect[Any, Never, R2]) -> on_exit[R2]:
@@ -801,6 +1190,33 @@ def on_interrupt[R2](f: Callable[[frozenset[int]], Effect[Any, Never, R2]]) -> o
         return f(ids)
 
     return on_error(on_cause)
+
+
+# ================================================================================================
+# Composition
+# ================================================================================================
+
+
+def _tap(eff: AnyEffect, f: Callable[[Any], AnyEffect] | AnyEffect) -> AnyEffect:
+    def cont(a: Any) -> AnyEffect:
+        tapped = f(a) if callable(f) else f
+        return OnSuccess(tapped, lambda _: Success(a))
+
+    return OnSuccess(eff, cont)
+
+
+@final
+class tap[B, E2, R2]:
+    """eff.pipe(tap(lambda a: ...)) or eff.pipe(tap(effect)): run after success, keep the value.
+    Like catch_all, the function's parameter is Any; use the method for a typed parameter."""
+
+    __slots__ = ("f",)
+
+    def __init__(self, f: Callable[[Any], Effect[B, E2, R2]] | Effect[B, E2, R2]) -> None:
+        self.f = f
+
+    def __call__[A, E, R](self, eff: Effect[A, E, R]) -> Effect[A, E | E2, R | R2]:
+        return _tap(eff, self.f)
 
 
 # ================================================================================================

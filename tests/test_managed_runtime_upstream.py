@@ -54,7 +54,6 @@ from peffect import (
     fork,
     fork_daemon,
     gen,
-    managed_runtime,
     never,
     provide,
     run,
@@ -70,8 +69,7 @@ from peffect import (
 )
 from peffect.core import WithFiber
 from peffect.fiber import await_exit
-
-ManagedRuntime = managed_runtime.ManagedRuntime
+from peffect.managed_runtime import ManagedRuntime
 
 VOID = succeed(None)
 
@@ -793,7 +791,11 @@ async def _bridge(name: str) -> tuple[Any, ManagedRuntime[Any, Any] | None]:
         return _await_exit, None
     rt = ManagedRuntime.make(Layer.effect_discard(VOID))
     await rt.run(VOID)
-    return (lambda eff, hook: rt.run_exit(eff, on_fiber_start=hook)), rt
+
+    def start(eff: Any, hook: Any) -> Coroutine[Any, Any, Exit[Any, Any]]:
+        return rt.run_exit(eff, on_fiber_start=hook)
+
+    return start, rt
 
 
 @pytest.mark.parametrize("name", BRIDGES)

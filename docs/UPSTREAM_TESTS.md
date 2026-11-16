@@ -98,10 +98,11 @@ pinned in `test_clock_duration_upstream.py`.
 | Batch | File | Ports | Needs | Status |
 |---|---|---|---|---|
 | prerequisites | `tests/test_fiber_start_upstream.py` | `Effect.test.ts` :2987 :3013 :3160 :3169, `Fiber.test.ts` :137 :225; source-derived cases (labelled) for forkUnsafe :5614-5637, forkDetach :5728, exit :3873-3889, exitFailCause core.ts:611-624 | — | green: `fork`/`fork_daemon(start_immediately=)`, `exit_` |
+| lifecycle | `tests/test_fiber_lifecycle_upstream.py` | `Fiber.test.ts` :10 :22, `Effect.test.ts` forkIn :3039 (×2) :3057 :3073; source-derived cases (labelled) for runForkWith :5773-5799, fiberRunIn :5801-5822, forkIn :5717-5737, forkUnsafe mask :5622, fiberScopeFinalizer :5690-5693, scopeCloseFinalizers skip :4090-4093, scopeRemoveFinalizerUnsafe :4159-4172, FiberImpl parent clearing :652-655 | E | green (26): `run_fork`, `run_fork_with`, `run_in`, `fork_in`, `Scope.remove_finalizer_unsafe`, `Fiber.parent` |
 | D: TestClock | `tests/test_testclock.py` | `TestClock.test.ts` sleep, setTime and adjust groups | C, prerequisites | drafted; red only on missing `peffect.testing` (16) |
 | E: Scope, sequential | `tests/test_scope.py` | `Scope.test.ts` sequential variants: interrupted close, direct close after interrupt, masked `closeUnsafe`, throw-then-continue, sole throwing finalizer keeps the failure, the 4 fork tests | A, B, prerequisites | green (20, with the Scope.ts doc examples and source-derived cases). `Scope.use` (scopeUse) not ported, deferred to F |
-| F: remaining Scope effects | `tests/test_scope_effects.py` | `Effect.test.ts` scoped `:86`, forkIn `:3038-3071`, forkScoped `:3083-3116`, updateServiceScoped `:5334` `:5345` `:5359` | E | planned |
-| G: parallel Scope | `tests/test_scope_parallel.py` | `Scope.test.ts` parallel variants (4), `Effect.test.ts:3073`, TestClock "handles multiple sleeps" (needs `forkScoped`) | D, E, F | `Scope.test.ts` :7 (harness adaptation: Deferred gates for TestClock), :22, :39, :124 green; independently verified by Sol 6.1. `Effect.test.ts:3073` and "handles multiple sleeps" wait on F and D. Not reachable yet: upstream skips a finalizer keyed by the closing fiber (`key !== parent`, `internal/effect.ts:4090-4093`); only `forkIn`/`Fiber.runIn` register such a key, so it arrives with F, not as a guard now |
+| F: remaining Scope effects | `tests/test_scope_effects.py` | `Effect.test.ts` scoped `:86`, forkIn `:3038-3071` (ported in lifecycle), forkScoped `:3083-3116`, updateServiceScoped `:5334` `:5345` `:5359` | E | planned |
+| G: parallel Scope | `tests/test_scope_parallel.py` | `Scope.test.ts` parallel variants (4), `Effect.test.ts:3073`, TestClock "handles multiple sleeps" (needs `forkScoped`) | D, E, F | `Scope.test.ts` :7 (harness adaptation: Deferred gates for TestClock), :22, :39, :124 green; independently verified by Sol 6.1. `Effect.test.ts:3073` green in the lifecycle file with the closing-fiber skip (`key !== parent`, `internal/effect.ts:4090-4093`); "handles multiple sleeps" waits on D and `forkScoped` |
 
 Decisions already made for these batches:
 - **E and F** may use a small test-only latch built on the public `async_`. No fake Scope or Clock behavior.
@@ -269,6 +270,19 @@ every build attempt parked behind the gate. Upstream's `fromBuildMemo` observes 
 fail the entry is dropped and the later requester rebuilds. Upstream's value is
 `Effect.succeed`, so that rebuild does not park. Now only the first attempt parks.
 
+## ManagedRuntime
+
+`tests/test_managed_runtime_upstream.py` and `tests/test_managed_runtime_interleavings.py`
+contain 43 collected cases: upstream ports, vendor-derived disposal scenarios, Python async
+cancellation/retention seams, and bounded manual-scheduler interleavings. Each test records its
+source. The two upstream Pool tests remain unported because Pool is unavailable.
+
+The author measured 20/20 vendor scenarios matching and a 20,000-example deep run without
+failures. Independent review passed 54 focused tests including typing and boundaries, and
+replayed the vendor disposal outcome classes. It did not repeat the full deep search or
+mutation campaign. See INVARIANTS MR1–MR9 for contracts and limitations; no formal coverage of
+ManagedRuntime is claimed.
+
 ## Scheduler — `tests/test_scheduler_upstream.py`, `tests/test_fiber_resume_upstream.py`
 
 `Scheduler.test.ts` ports:
@@ -307,3 +321,22 @@ check is `.claude/skills/verify-formal-kernel` (bounded, nesting ≤ 2, not a pr
 depth).
 
 Status: implemented and independently reviewed; boundary correction and scheduled-start regression accepted.
+
+## Coordination and composition acceptance
+
+`test_latch_upstream.py`, `test_semaphore_upstream.py`, `test_option.py`,
+`test_composition_upstream.py` and `test_gen_cleanup.py`: 81 scoped tests passed in independent
+review. The review also passed 12 existing finalizer tests and the typing harness. Both original
+findings (split semaphore wake publication and invariant Some) are corrected; scheduler-visible
+wake-budget and negative-free resize regressions catch the formerly surviving mutations.
+
+Effect and Layer pipes support 0–20 steps. Tap supports a function or an Effect. Python generator
+closing is explicitly an adaptation; INVARIANTS records its cause contract and typing limits.
+The callback mutation harness must rebind the package export as well as the defining module,
+otherwise tests importing `peffect.on_exit_with_dispatcher` do not exercise the mutation.
+
+The paired Batch application now checks 21 scenarios against actual vendored Effect. Independent
+review found application-level eager capacity checking and custom-resource wiring errors in both
+languages. Execution-time append checks and a single chosen Ledger identity correct them; saved
+and preconstructed append regressions plus custom-capacity sharing exercise those contracts.
+This is application evidence, not exhaustive concurrency evidence or a formal library proof.

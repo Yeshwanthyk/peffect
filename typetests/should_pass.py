@@ -19,6 +19,7 @@ from peffect import (
     Failure,
     Fiber,
     Layer,
+    ManagedRuntime,
     MemoMap,
     Reference,
     Scope,
@@ -50,9 +51,11 @@ from peffect import (
     sleep,
     succeed,
     sync,
+    tap,
 )
 from peffect import scope as current_scope  # Effect.scope
 from peffect.duration import Duration, seconds
+from peffect.option import Option, Some
 from peffect.scheduler import (
     MaxOpsBeforeYield,
     MixedScheduler,
@@ -458,4 +461,140 @@ def parity_application_types() -> None:
     assert_type(
         provide_layer(composed.make_checkout_app())(composed.place_or_pending(composed.Order(1))),
         Effect[composed.Receipt, parity.UserNotFound | composed.OutOfStock, Never],
+    )
+
+
+def lifecycle_types() -> None:
+    from peffect import fork_in, run_fork, run_fork_with, run_in
+
+    owner = Scope.make_unsafe()
+    root = run_fork(succeed(1))
+    assert_type(root, Fiber[int, Never])
+    assert_type(run_in(root, owner), Fiber[int, Never])
+    assert_type(fork_in(Users().use(), owner), Effect[Fiber[Repo, Never], Never, Users])
+    runner = run_fork_with(Users.context(Repo()))
+    assert_type(runner(Users().use()), Fiber[Repo, Never])
+    assert_type(runner(succeed(1)), Fiber[int, Never])
+
+
+async def managed_runtime_types(
+    both: ManagedRuntime[Users | Log, KeyError], narrow_error: ManagedRuntime[Users, KeyError]
+) -> None:
+    rt = ManagedRuntime.make(Layer.succeed(Users, Repo()))
+    assert_type(rt, ManagedRuntime[Users, Never])
+    assert_type(rt.run_fork(Users().use()), Fiber[Repo, Never])
+    assert_type(rt.run_fork(succeed(1)), Fiber[int, Never])
+    assert_type(await rt.run_exit(Users().use()), Exit[Repo, Never])
+    assert_type(await rt.run(Users().use()), Repo)
+    assert_type(await rt.context(), Context[Users])
+    assert_type(rt.context_effect, Effect[Context[Users], Never, Never])
+    assert_type(rt.dispose_effect, Effect[None, Never, Never])
+    assert_type(both.run_fork(Users().use()), Fiber[Repo, KeyError])
+    # R is contravariant: a runtime with more services serves an effect needing fewer.
+    _fewer: ManagedRuntime[Users, KeyError] = both
+    # ER is covariant: a build error widens.
+    _wider: ManagedRuntime[Users, LookupError] = narrow_error
+    async with rt as entered:
+        assert_type(entered, ManagedRuntime[Users, Never])
+
+
+class ComposeBoom(Exception): ...
+
+
+class ComposeOther(Exception): ...
+
+
+class ComposeA(Tag[str], key="snip/A"): ...
+
+
+class ComposeB(Tag[int], key="snip/B"): ...
+
+
+def composition_ok(p: Effect[int, ComposeBoom, ComposeA]) -> None:
+    assert_type(p.pipe(), Effect[int, ComposeBoom, ComposeA])
+    assert_type(
+        p.pipe(lambda e: e.map(str), lambda e: e.map(len)), Effect[int, ComposeBoom, ComposeA]
+    )
+    assert_type(p.pipe(lambda _: "x", len), int)
+    assert_type(
+        p.tap(lambda _: ComposeB().use().flat_map(lambda _: fail(ComposeOther()))),
+        Effect[int, ComposeBoom | ComposeOther, ComposeA | ComposeB],
+    )
+    assert_type(p.tap(sync(lambda: 1)), Effect[int, ComposeBoom, ComposeA])
+    assert_type(
+        p.pipe(tap(lambda a: succeed(a)), tap(ComposeB().use())),
+        Effect[int, ComposeBoom, ComposeA | ComposeB],
+    )
+    twenty = p.pipe(
+        lambda e: e,
+        lambda e: e,
+        lambda e: e,
+        lambda e: e,
+        lambda e: e,
+        lambda e: e,
+        lambda e: e,
+        lambda e: e,
+        lambda e: e,
+        lambda e: e,
+        lambda e: e,
+        lambda e: e,
+        lambda e: e,
+        lambda e: e,
+        lambda e: e,
+        lambda e: e,
+        lambda e: e,
+        lambda e: e,
+        lambda e: e,
+        lambda e: e,
+    )
+    assert_type(twenty, Effect[int, ComposeBoom, ComposeA])
+
+
+def option_ok(s: Some[int], o: Option[int], e: Effect[Option[int], ValueError, Never]) -> None:
+    _s: Some[object] = s
+    _o: Option[object] = o
+    _e: Effect[Option[object], Exception, object] = e
+
+
+class PipeLayerA(Tag[str], key="snip/PipeLayerA"): ...
+
+
+class PipeLayerC(Tag[float], key="snip/PipeLayerC"): ...
+
+
+type PipeLayerType = Layer[PipeLayerA, Never, Never]
+
+
+def layer_identity(layer: PipeLayerType) -> PipeLayerType:
+    return layer
+
+
+def layer_pipe_types(base: PipeLayerType, c: Layer[PipeLayerC]) -> None:
+    assert_type(base.pipe(), PipeLayerType)
+    assert_type(base.pipe(Layer.merge(c)), Layer[PipeLayerA | PipeLayerC, Never, Never])
+    assert_type(base.pipe(lambda layer: (layer, 1), lambda t: t[1]), int)
+    assert_type(
+        base.pipe(
+            layer_identity,
+            layer_identity,
+            layer_identity,
+            layer_identity,
+            layer_identity,
+            layer_identity,
+            layer_identity,
+            layer_identity,
+            layer_identity,
+            layer_identity,
+            layer_identity,
+            layer_identity,
+            layer_identity,
+            layer_identity,
+            layer_identity,
+            layer_identity,
+            layer_identity,
+            layer_identity,
+            layer_identity,
+            layer_identity,
+        ),
+        PipeLayerType,
     )
