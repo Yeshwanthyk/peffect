@@ -21,27 +21,11 @@ def test_verify_structural_equality():
     """Option.test.ts:107."""
     assert Some(1) == Some(1)
     assert Some(1) != Some(2)
-    none: Option[int] = None
-    assert none is None  # the single None value: Equal.equals(none(), none())
 
 
 def test_verify_hash_equality():
     """Option.test.ts:113."""
     assert hash(Some(1)) == hash(Some(1))
-    assert (hash(Some(1)) == hash(Some(2))) is False
-    assert hash(None) == hash(None)
-
-
-def test_is_none():
-    """Option.test.ts:380."""
-    options: list[Option[int]] = [None, Some(1)]
-    assert [o is None for o in options] == [True, False]
-
-
-def test_is_some():
-    """Option.test.ts:385."""
-    options: list[Option[int]] = [None, Some(1)]
-    assert [isinstance(o, Some) for o in options] == [False, True]
 
 
 # == source-derived ============================================================================
@@ -52,13 +36,18 @@ def test_some_of_none_is_present():
     value. This is why Option is not `A | None`: `Some(None)` must differ from absent."""
     nested: Option[None] = Some(None)
     assert isinstance(nested, Some)
-    assert nested is not None
     assert nested.value is None
 
 
 def test_some_equality_compares_the_value_and_the_tag():
     """internal/option.ts:32-36: equal iff the other is also a Some with an equal value."""
+    class EqualToOne:
+        def __eq__(self, other: object) -> bool:
+            return other == 1
+
     assert Some((1, "a")) == Some((1, "a"))
+    assert Some(1) == Some(1.0)
+    assert Some(EqualToOne()) == Some(1)
     assert Some(1) != 1
     assert Some(Some(1)) != Some(1)
 
@@ -68,6 +57,8 @@ def test_some_value_is_matchable_and_immutable():
     match Some(3):
         case Some(value):
             assert value == 3
+        case _:
+            pytest.fail("Some pattern did not match")
     some = Some(3)
     for name in ("value", "_value", "other"):
         with pytest.raises(AttributeError):

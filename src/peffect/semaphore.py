@@ -80,7 +80,6 @@ class Semaphore:
 
     @classmethod
     def make_unsafe(cls, permits: int) -> Semaphore:
-        """:234."""
         return cls(permits)
 
     @classmethod
@@ -233,7 +232,6 @@ class Semaphore:
         return gate
 
     def with_permit[A, E, R](self, eff: Effect[A, E, R]) -> Effect[A, E, R]:
-        """:374."""
         return self.with_permits(1)(eff)
 
     def with_permits_if_available(self, permits: int) -> WithPermitsIfAvailable:

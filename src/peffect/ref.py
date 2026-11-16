@@ -40,7 +40,6 @@ class Ref[A]:
         return sync(lambda: cls(value))
 
     def get_unsafe(self) -> A:
-        """Read the cell synchronously (Ref.ts getUnsafe)."""
         return self.current
 
     def get(self) -> Effect[A, Never, Never]:
@@ -110,7 +109,8 @@ class Ref[A]:
 
     def update_and_get(self, f: Callable[[A], A]) -> Effect[A, Never, Never]:
         def go() -> A:
-            self.current = value = f(self.current)
+            value = f(self.current)
+            self.current = value
             return value
 
         return sync(go)

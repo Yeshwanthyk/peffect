@@ -20,6 +20,7 @@ one-finalizer closes take the common path, as upstream's do.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Generator
 from typing import Any, Final, Literal, Never, Protocol, final, overload
 
@@ -143,7 +144,6 @@ def _add_finalizer_unsafe(scope: ScopeService, key: object, finalizer: Finalizer
 
 
 def _remove_finalizer_unsafe(scope: ScopeService, key: object) -> None:
-    """scopeRemoveFinalizerUnsafe, :4159-4172."""
     state = scope.state
     if not isinstance(state, Open):
         return
@@ -159,8 +159,9 @@ def _run_finalizer(finalizer: Finalizer, exit_: Exit[Any, Any]) -> Effect[Any, N
     """runFinalizer, :4058-4067: a finalizer that raises becomes its defect."""
     try:
         return finalizer(exit_)
-    except Exception as e:
-        return Failure(Cause.die(e))
+    except BaseException as e:
+        cause = Cause.interrupt() if isinstance(e, asyncio.CancelledError) else Cause.die(e)
+        return Failure(cause)
 
 
 def _as_void_all(exits: list[Exit[Any, Never]]) -> Exit[None, Never]:

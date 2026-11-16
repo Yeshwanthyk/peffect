@@ -3,8 +3,10 @@
 
    Code: src/peffect/fiber.py (Fiber.evaluate, yield_now, interrupt_unsafe, _done, _await_all,
    _start), src/peffect/core.py (Async, Failure, SetInterruptible). Effect v4 runs a fiber
-   synchronously inside whoever wakes it: a resume, an interrupt of a fiber that is not running,
-   an immediate fork and a root start all call `evaluate` before returning. So drives nest:
+   synchronously inside whoever wakes it until the per-loop depth budget is reached. A deep
+   wake instead queues a fresh Park whose token can be claimed by an interrupt. WakeBudget=1
+   makes that branch reachable with two fibers; runtime sweep covers the real 24-drive cutoff.
+   A resume, interrupt, immediate fork and root start otherwise call evaluate at once. Drives nest:
    `cur` is the innermost running drive and `stk` the drives suspended under it, outermost
    first. Every action is atomic: one asyncio loop, and `evaluate` never awaits.
 
@@ -19,7 +21,8 @@
    interrupter interrupts P once. Async completions arrive at any point, late ones included. *)
 EXTENDS Naturals, Sequences, FiniteSets
 
-CONSTANT Break  \* "none" = the code as it is; the other values mirror scratch breaks (SKILL.md)
+CONSTANTS Break, WakeBudget
+\* WakeBudget=1 deliberately makes a two-fiber instance reach runtime's deferred-wake branch.
 
 Fibers == {"P", "C"}
 Prog == [f \in Fibers |->
@@ -77,6 +80,12 @@ Replace(f) == cur' = f /\ UNCHANGED stk
 \* the claim a resume, queued step or interrupt makes on the current Park, then evaluate
 Claim(r, node) == [r EXCEPT !.pdone = TRUE, !.parked = FALSE, !.node = node,
                             !.wakes = IF r.parked THEN @ + 1 ELSE @]
+AtBudget == Len(stk) + (IF cur = "none" THEN 0 ELSE 1) >= WakeBudget
+\* Fiber.evaluate's depth branch: after the old Park is claimed, install a fresh one. The
+\* queued step carries its own token and intended node; an interrupt may claim it first.
+Fresh(r, node) == [r EXCEPT !.pid = @ + 1000, !.pdone = FALSE, !.parked = TRUE,
+                            !.wakes = 0, !.node = "none",
+                            !.drv = Append(@, <<"d", r.pid + 1000, node>>)]
 
 Masked(f) == ~fb[f].intr \/ (f = "C" /\ fb[f].pc \in {5, 6})
 \* Keep the explicit-mask interval independent of intr; also check inherited startup masks.
@@ -90,14 +99,15 @@ IntUnsafe(r, running) ==
   IF r.exit # "none" THEN [rec |-> r, now |-> FALSE]
   ELSE IF running \/ (~r.intr /\ Break # "no_mask_check")
        THEN [rec |-> [r EXCEPT !.irq = TRUE, !.req = TRUE, !.dfr = TRUE], now |-> FALSE]
-       ELSE IF ~r.st
+       ELSE IF ~r.st /\ ~r.parked
        THEN [rec |-> [r EXCEPT !.irq = TRUE, !.req = TRUE, !.dfr = FALSE, !.exit = "int",
                                !.pubs = @ + 1], now |-> FALSE]
        ELSE [rec |-> [Claim(r, "int") EXCEPT !.irq = TRUE, !.req = TRUE, !.dfr = FALSE],
              now |-> TRUE]
 
 \* end of evaluate: parked while an interrupt waited (it came in during register) -> a fresh
-\* evaluate of the interrupt at the same nesting level; otherwise the drive returns
+\* evaluate of the interrupt at the same nesting level. Python exits the fiber's contextvars
+\* Context before this tail action re-enters it; context state is outside this model.
 DriveTail(f, r) ==
   IF r.dfr /\ r.intr /\ r.parked
   THEN /\ fb' = [fb EXCEPT ![f] = [Claim(r, "int") EXCEPT !.dfr = FALSE]]
@@ -121,7 +131,8 @@ Done(f, e, o) ==
       liveC == f = "P" /\ started /\ fb["C"].exit = "none" /\ Break # "no_wait"
       p == fb["P"]
       ic == IntUnsafe(fb["C"], Running("C"))
-      pub == [r EXCEPT !.exit = e2, !.pubs = @ + 1, !.node = "none"]
+      pub == IF r.exit # "none" THEN r
+             ELSE [r EXCEPT !.exit = e2, !.pubs = @ + 1, !.node = "none"]
       \* C's _publish calls P's _await_all observer: one_done -> resume(UNIT) -> P.evaluate.
       \* C's drive has nothing left once it publishes, so P's drive replaces it; Python still
       \* has C.running set here (upstream has already cleared it), but every entry to C now
@@ -212,9 +223,11 @@ Eval(f) ==
         /\ started' = TRUE
         /\ IF imm THEN  \* _start(immediate=True): C's evaluate runs now, nested in P's
               /\ fb' = [fb EXCEPT ![f] = [r EXCEPT !.pc = @ + 1, !.node = "ok"],
-                                  !["C"] = [@ EXCEPT !.node = "start", !.parked = FALSE, !.st = TRUE,
-                                     !.intr = IF inherit THEN r.intr ELSE TRUE]]
-              /\ Push("C")
+                                  !["C"] = IF AtBudget
+                                     THEN Fresh([@ EXCEPT !.intr = IF inherit THEN r.intr ELSE TRUE], "start")
+                                     ELSE [@ EXCEPT !.node = "start", !.parked = FALSE, !.st = TRUE,
+                                        !.intr = IF inherit THEN r.intr ELSE TRUE]]
+              /\ IF AtBudget THEN UNCHANGED <<cur, stk>> ELSE Push("C")
               /\ UNCHANGED <<obs, sent, selfUsed>>
            ELSE  \* _start: C's start is queued on P's dispatcher
               /\ fb' = [fb EXCEPT ![f] = [r EXCEPT !.pc = @ + 1, !.node = "ok"],
@@ -236,22 +249,36 @@ Drive(f) ==
       t == Head(r.drv)
       r1 == [r EXCEPT !.drv = Tail(@)]
       live == IF t[1] = "start" THEN r.exit = "none"
-              ELSE (t[2] = r.pid /\ ~r.pdone) \/ (Break = "no_token_claim" /\ r.exit = "none")
+              ELSE (t[2] = r.pid /\ ~r.pdone)
+                \/ (Break = "no_token_claim" /\ t[1] = "y" /\ r.exit = "none")
+                \/ (Break = "no_deferred_token" /\ t[1] = "d" /\ r.exit = "none")
   IN /\ r.drv # <<>>
+     /\ (t[1] # "d" \/ cur = "none") \* asyncio call_soon cannot run in a nested flush
      /\ IF ~live THEN fb' = [fb EXCEPT ![f] = r1] /\ UNCHANGED <<cur, stk>>
         ELSE IF t[1] = "start" THEN
-           fb' = [fb EXCEPT ![f] = [r1 EXCEPT !.node = "start", !.parked = FALSE, !.st = TRUE]]
-           /\ Push(f)
-        ELSE fb' = [fb EXCEPT ![f] = Claim(r1, "ok")] /\ Push(f)
+           fb' = [fb EXCEPT ![f] = IF AtBudget THEN Fresh([r1 EXCEPT !.st = TRUE], "start")
+                             ELSE [r1 EXCEPT !.node = "start", !.parked = FALSE, !.st = TRUE]]
+           /\ IF AtBudget THEN UNCHANGED <<cur, stk>> ELSE Push(f)
+        ELSE LET node == IF t[1] = "d" THEN t[3] ELSE "ok"
+                 claimed == [Claim(r1, node) EXCEPT !.st = TRUE]
+             IN /\ fb' = [fb EXCEPT ![f] = IF AtBudget THEN Fresh(claimed, node)
+                                                 ELSE claimed]
+                /\ IF AtBudget THEN UNCHANGED <<cur, stk>> ELSE Push(f)
      /\ UNCHANGED <<started, obs, sent, selfUsed>>
 
-\* an async completion fires: Async resume checks `not park.done`, then evaluates at once
+\* an async completion fires: a foreign thread first marshals onto the owning loop without
+\* touching Park. On the loop, Async resume checks `not park.done`, then evaluates at once.
+\* AtBudget installs a fresh queued Park after the old registration's claim. A stale deferred
+\* step is checked against its own token by Drive; Break_no_deferred_token makes this red.
 ExtResume(f) ==
   \E id \in fb[f].ext :
     LET r == fb[f]
         r1 == [r EXCEPT !.ext = @ \ {id}]
-        hit == (id = r.pid /\ ~r.pdone) \/ (Break = "no_park_done" /\ r.exit = "none")
-    IN /\ IF hit THEN fb' = [fb EXCEPT ![f] = Claim(r1, "ok")] /\ Push(f)
+        hit == r.exit = "none" /\ ((id = r.pid /\ ~r.pdone) \/ Break = "no_park_done")
+    IN /\ IF hit THEN fb' = [fb EXCEPT ![f] = IF AtBudget
+                                               THEN Fresh(Claim(r1, "ok"), "ok")
+                                               ELSE Claim(r1, "ok")]
+                         /\ IF AtBudget THEN UNCHANGED <<cur, stk>> ELSE Push(f)
           ELSE fb' = [fb EXCEPT ![f] = r1] /\ UNCHANGED <<cur, stk>>
        /\ UNCHANGED <<started, obs, sent, selfUsed>>
 
@@ -260,8 +287,8 @@ Interrupt ==
   LET x == IntUnsafe(fb["P"], Running("P")) IN
   /\ ~sent /\ fb["P"].exit = "none"
   /\ sent' = TRUE
-  /\ fb' = [fb EXCEPT !["P"] = x.rec]
-  /\ IF x.now THEN Push("P") ELSE UNCHANGED <<cur, stk>>
+  /\ fb' = [fb EXCEPT !["P"] = IF x.now /\ AtBudget THEN Fresh(x.rec, "int") ELSE x.rec]
+  /\ IF x.now /\ ~AtBudget THEN Push("P") ELSE UNCHANGED <<cur, stk>>
   /\ UNCHANGED <<started, obs, selfUsed>>
 
 Settled(f) == fb[f].drv = <<>> /\ fb[f].ext = {} /\ (fb[f].exit # "none" \/ (f = "C" /\ ~started))

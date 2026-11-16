@@ -369,7 +369,6 @@ def test_boundary_hash_and_equality_on_large_millis() -> None:
     # port 266 and port 281: Hash.hash(roundMillisToNanos(millis)) for Millis, exact bigint
     assert hash(D.seconds(5)) == hash(D.nanos(5_000_000_000))
     assert hash(D.millis(-5000)) == hash(D.nanos(-5_000_000_000))
-    assert hash(D.infinity) == hash(D.infinity)
     assert D.nanos(5_000_000_000) in {D.seconds(5)}
     assert D.millis(2.0**1023) == D.nanos(1_000_000 << 1023)
     assert D.millis(1e303) == D.millis(1e303)

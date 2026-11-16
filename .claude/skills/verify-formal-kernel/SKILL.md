@@ -32,7 +32,21 @@ Why the model's pass still means something with them added (an argument, not a c
 nor holds back an interrupt, and the model's "the interrupt unwinds to the top" still describes
 the code.
 
-**Sync:** 2026-11-16, approved maintainability cleanup: no model change. Traversal now derives
+**Sync:** 2026-11-16, deferred-wake correction: `WakeBudget=1` exercises fresh queued Parks
+from immediate start, Async resume and interrupt. `Drive` accepts the queued step only for
+its current token, and asyncio `call_soon` steps run from the loop, outside nested dispatcher
+flushes. TLC 1.7.4 checks 2857 states, depth 24, all rules hold; 24 linked tests pass. The
+new `Break_no_deferred_token.cfg` makes K7 red. Runtime subprocess probes cover stale steps,
+masked critical exit and recursion limit 350. Contextvars and cause content remain runtime-only.
+
+Previous Sync, 2026-11-16, runtime hardening: the model's DriveTail and ExtResume descriptions
+state that Python context exit precedes tail delivery and foreign-thread resumes marshal before
+claiming Park. The first two-fiber model did not reach the depth cutoff; it was replaced by the
+reachable low-budget transition above. TLC checked 2232 states and the seven original Breaks
+were red. An isolated `_done` no-wait mutation in `/tmp/peffect-formal-break.pvF59F` made both
+linked test targets red; production source was untouched.
+
+Previous Sync, 2026-11-16, approved maintainability cleanup: no model change. Traversal now derives
 admission from index exhaustion, cancellation and its failure accumulator instead of a separate
 `done` cell and success-as-cancellation sentinel. These invocation-local values are not modeled
 protocol fields; workers still use `_start`, `Async` and synchronous observers. No write to
@@ -146,7 +160,8 @@ forks C with default or inherited interruptibility, yields, explicitly enables i
 parks, and ends. C yields, parks, explicitly enables interruption, masks, parks inside the mask,
 and unmasks. One interrupt of P, async completions (late ones included) and dispatcher tasks can
 each arrive from the loop or nested inside any running drive; one register can interrupt its own
-fiber. Startup may be scheduled or immediate. 2232 states, depth 21. Nesting is at most two
+fiber. Startup may be scheduled or immediate. With `WakeBudget=1`, 2857 states, depth 24,
+including the deferred-start, deferred-resume and deferred-interrupt branches. Nesting is at most two
 drives deep (two fibers, each at most once on the stack, which K3 checks): this is a bounded
 check of one instance, not a proof for arbitrary nesting depth, and it says nothing about
 Python's recursion limit (see INVARIANTS SC7). Both fibers regain interruptibility before normal
@@ -208,6 +223,7 @@ the trace shows it nested.
 | `Break_no_mask_check.cfg` | `interrupt_unsafe` runs a fiber that is not running without checking `interruptible` | K6 |
 | `Break_no_park_done.cfg` | `Async` resume ignores `park.done` | K3, K7, deadlock, AllPublish |
 | `Break_no_token_claim.cfg` | `yield_now`'s queued step ignores `park.done` (runs unless exited) | K1, K3, deadlock, AllPublish |
+| `Break_no_deferred_token.cfg` | a depth-deferred `call_soon` step ignores its fresh Park token | K7 |
 | `Break_no_loop_top.cfg` | `evaluate` drops the loop-top `_deferred` check | K7 |
 | `Break_no_wait.cfg` | `_done` publishes without waiting for live children | K8 |
 | `Break_no_notify.cfg` | `_await_all`'s observer never resumes the parent | deadlock, AllPublish |
@@ -223,7 +239,7 @@ the trace shows it nested.
 When a change to the code in Scope is intended:
 1. Update the matching model action in the same change.
 2. Rerun every `Break_*.cfg` and confirm each still goes red.
-3. Apply one real scratch break (the `_done` one is the quickest) and confirm `run.sh` goes red on the linked tests. Then restore it.
+3. Run `uv run python scripts/check_mutations.py`: require a green baseline and a red linked runtime assertion for the isolated `_done` break. Keep its evidence alongside the model results.
 4. Move the Sync line.
 
 ## Known findings
@@ -231,3 +247,11 @@ When a change to the code in Scope is intended:
 None open. Fixed on 2026-11-15:
 - **K7, `_done`.** Hypothesis found it, and `Break_old_done` reproduces it in the model. The fix moves the wait into the run loop.
 - **`_deferred` cleared at only some delivery sites.** Every delivery now goes through `take_interrupt`.
+
+## Runtime sensitivity command
+
+[verify-mutations](../verify-mutations/SKILL.md) supplies the reproducible isolated `_done`
+child-wait mutation required by Update step 3. Its clean baseline must pass and its mutated
+runtime assertion must fail; model failures alone do not establish runtime sensitivity.
+The command checks one linked regression, while this skill's normal run checks the full
+linked kernel/property suites. Report both scopes separately.

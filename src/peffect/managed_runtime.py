@@ -318,7 +318,6 @@ def _flatten[A, E](exit_: Exit[A, E]) -> Effect[A, E, Never]:
 
 
 def is_managed_runtime(value: object) -> bool:
-    """isManagedRuntime, :51."""
     return isinstance(value, ManagedRuntime)
 
 

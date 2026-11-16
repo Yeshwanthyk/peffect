@@ -31,12 +31,10 @@ class Deferred[A, E = Never]:
 
     @classmethod
     def make_unsafe(cls) -> Deferred[A, E]:
-        """Allocate an empty cell synchronously (Deferred.ts:151)."""
         return cls()
 
     @classmethod
     def make(cls) -> Effect[Deferred[A, E], Never, Never]:
-        """Allocate a fresh empty cell each time this effect runs (:178)."""
         return sync(cls.make_unsafe)
 
     def await_(self) -> Effect[A, E, Never]:
@@ -79,15 +77,12 @@ class Deferred[A, E = Never]:
         return True
 
     def done(self, exit_: Exit[A, E]) -> Effect[bool, Never, Never]:
-        """Attempt completion with an Exit (:363-366, completeWith :323-326)."""
         return sync(lambda: self.done_unsafe(exit_))
 
     def succeed(self, value: A) -> Effect[bool, Never, Never]:
-        """Attempt successful completion (:806-810)."""
         return self.done(Success(value))
 
     def fail(self, error: E) -> Effect[bool, Never, Never]:
-        """Attempt typed failure completion (:400-404)."""
         return self.done(Failure(Cause.fail(error)))
 
     def interrupt_with(self, fiber_id_: int) -> Effect[bool, Never, Never]:

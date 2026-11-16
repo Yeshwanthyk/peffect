@@ -205,6 +205,8 @@ class _Registry[T]:
     No copied waiter snapshot can accidentally wake a cancelled waiter.
     """
 
+    __slots__ = ("_iterators", "_next", "_order", "_values")
+
     def __init__(self) -> None:
         self._values: dict[int, T] = {}
         self._order: list[int] = []
@@ -247,26 +249,26 @@ class _Registry[T]:
             self._compact()
 
 
-@dataclass
+@dataclass(slots=True, eq=False)
 class _Single[A]:
     message: A
     resume: _Resume[bool, Never]
 
 
-@dataclass
+@dataclass(slots=True, eq=False)
 class _Batch[A]:
     remaining: list[A]
     resume: _Resume[list[A], Never]
     offset: int = 0
 
 
-@dataclass
+@dataclass(slots=True, eq=False)
 class _Taker[E]:
     ready: Callable[[], bool]
     resume: _Resume[None, E]
 
 
-@dataclass
+@dataclass(slots=True, eq=False)
 class _Active[A, E]:
     # None is Open; a stored terminal Failure is Closing. Done owns no registries.
     terminal: Failure[E] | None = None
@@ -277,7 +279,7 @@ class _Active[A, E]:
     awaiters: _Registry[_Resume[None, E]] = field(default_factory=_Registry[_Resume[None, E]])
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class _Done[E]:
     terminal: Failure[E]
 

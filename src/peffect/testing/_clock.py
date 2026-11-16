@@ -79,7 +79,7 @@ class _Sleep:
 
 
 @final
-@dataclass(slots=True)
+@dataclass(slots=True, eq=False)
 class _WakeTracker:
     """Dispatcher tasks a wake scheduled that have not finished yet."""
 

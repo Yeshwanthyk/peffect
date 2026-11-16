@@ -147,7 +147,6 @@ def log_with_level(level: Severity) -> Callable[..., Effect[None, Never, Never]]
 
 
 log_warning = log_with_level("Warn")
-"""Effect.logWarning."""
 
 __all__ = [
     "CurrentLoggers",

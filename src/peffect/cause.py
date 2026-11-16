@@ -11,8 +11,8 @@ Flat like Effect v4 (src/Cause.ts:79-82); `+` keeps order and drops exact duplic
 (src/internal/core.ts:283-323).
 
 A Die's defect is any value, as in v4 (`Die.defect: unknown`): when a defect is present, a
-finalizer's combine elects every Fail to a Die (`elect_defects`), and a Fail's error need not be
-an exception. `die()` still takes an exception; only election makes a non-exception defect.
+finalizer's combine elects non-completion Fails to Dies (`elect_defects`). A Fail's error need
+not be an exception. `die()` still takes an exception; election can make another value a defect.
 """
 
 from __future__ import annotations
@@ -62,6 +62,9 @@ class Done[A = None]:
 
     def __repr__(self) -> str:
         return f"Done({self._value!r})"
+
+    def __reduce__(self) -> tuple[type[Done[A]], tuple[A]]:
+        return type(self), (self._value,)
 
 
 def is_done(value: object) -> TypeIs[Done[object]]:
@@ -115,11 +118,16 @@ class Cause(Generic[E_co]):
         return Cause(tuple(out))
 
     def elect_defects(self) -> Cause[E_co]:
-        """If a Die is present, every Fail becomes a Die holding its error, in place.
+        """If a Die is present, each non-Done Fail becomes a Die holding its error, in place.
         Effect v4: causeElectDefects, internal/effect.ts:184-191."""
         if not (self.defects and self.failures):
             return self
-        return Cause(tuple(Die(r.error) if isinstance(r, Fail) else r for r in self.reasons))
+        return Cause(
+            tuple(
+                Die(r.error) if isinstance(r, Fail) and not is_done(r.error) else r
+                for r in self.reasons
+            )
+        )
 
     def without_fails(self) -> Cause[Never]:
         return Cause(tuple(r for r in self.reasons if not isinstance(r, Fail)))

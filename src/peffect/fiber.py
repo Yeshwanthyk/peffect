@@ -10,11 +10,13 @@ Effect v4: internal/effect.ts:567-803 (FiberImpl), Scheduler.ts (MixedScheduler)
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import itertools
 import math
 import sys
 from collections.abc import Callable, Iterable, Iterator
 from typing import Any, Final, Generic, Literal, Never, Protocol, TypeVar, final
+from weakref import WeakKeyDictionary
 
 from peffect.cause import Cause, Interrupt
 from peffect.core import (
@@ -45,6 +47,8 @@ A_co = TypeVar("A_co", covariant=True)
 E_co = TypeVar("E_co", covariant=True)
 
 _ids = itertools.count(1)
+_wake_depth: WeakKeyDictionary[asyncio.AbstractEventLoop, int] = WeakKeyDictionary()
+_MAX_WAKE_DEPTH = 24
 
 type Observer = Callable[[Exit[Any, Any]], None]
 type Task = Callable[[], None]
@@ -134,9 +138,17 @@ class _MixedDispatcher:
 
     def _run_tasks(self) -> None:
         buckets, self._buckets = self._buckets, []
+        fatal: BaseException | None = None
         for _, tasks in buckets:
             for task in tasks:
-                task()
+                try:
+                    task()
+                except BaseException as error:
+                    reported = _report_task_error(error)
+                    if fatal is None:
+                        fatal = reported
+        if fatal is not None:
+            raise fatal
 
     def flush(self) -> None:
         while self._buckets:
@@ -144,6 +156,18 @@ class _MixedDispatcher:
                 self._running()
                 self._running = None
             self._run_tasks()
+
+
+def _report_task_error(error: BaseException) -> BaseException | None:
+    if not isinstance(error, Exception):
+        return error
+    try:
+        asyncio.get_running_loop().call_exception_handler(
+            {"message": "peffect dispatcher task failed", "exception": error}
+        )
+    except BaseException as reporting_error:
+        return reporting_error
+    return None
 
 
 DEFAULT_SCHEDULER: Final[SchedulerService] = MixedScheduler()
@@ -170,9 +194,12 @@ class Fiber(Generic[A_co, E_co]):
         "_dispatcher",
         "_ending",
         "_exit",
+        "_fatal",
+        "_loop",
         "_observers",
         "_parent",
         "_parked",
+        "_python_context",
         "_scheduler",
         "_yield_at",
         "children",
@@ -197,6 +224,12 @@ class Fiber(Generic[A_co, E_co]):
         self._deferred = False  # an interrupt arrived while running; deliver at the next step
         self._parked: Park | None = None  # the Async or queued step a wake must claim first
         self._exit: Exit[Any, Any] | None = None
+        self._python_context = contextvars.copy_context()
+        try:
+            self._loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
+        except RuntimeError:
+            self._loop = None
+        self._fatal: BaseException | None = None
         self._observers: list[Observer] = []
         self._auto_yielded = False  # this slice resumes a budget yield: run one op unchecked
         self._dispatcher: SchedulerDispatcher | None = None
@@ -252,6 +285,40 @@ class Fiber(Generic[A_co, E_co]):
         Effect v4: evaluate and runLoop, internal/effect.ts:615-728."""
         if self._exit is not None:
             return
+        loop = self._loop
+        if loop is None:
+            try:
+                loop = self._loop = asyncio.get_running_loop()
+            except RuntimeError:
+                pass
+        depth = _wake_depth.get(loop, 0) if loop is not None else 0
+        if loop is not None and depth >= _MAX_WAKE_DEPTH:
+            park = Park()
+            self._parked = park
+
+            def step() -> None:
+                if park.done:
+                    return
+                park.done = True
+                self.evaluate(eff)
+
+            loop.call_soon(step)
+            return
+        if loop is not None:
+            _wake_depth[loop] = depth + 1
+        try:
+            self._python_context.run(self._drive, eff)
+        finally:
+            if loop is not None:
+                _wake_depth[loop] = depth
+        # The previous drive's Context must be exited before a tail interrupt enters it.
+        if self._deferred and self.interruptible and self._parked is not None:
+            self._interrupt_now()
+        if self._exit is not None and self._fatal is not None:
+            fatal, self._fatal = self._fatal, None
+            raise fatal
+
+    def _drive(self, eff: AnyEffect) -> None:
         self._parked = None
         was_running, self.running = self.running, True
         resuming, self._auto_yielded = self._auto_yielded, False
@@ -260,28 +327,42 @@ class Fiber(Generic[A_co, E_co]):
         cur: AnyEffect | None = eff
         try:
             while cur is not None:
+                self._record_fatal(cur)
                 if self._deferred and self.interruptible:
                     cur = Failure(self.take_interrupt())
                 ops = self.current_op_count = self.current_op_count + 1
                 try:
-                    if (
-                        ops >= self._yield_at
-                        and not resuming
-                        and not yielding
-                        and (not self._ask_scheduler or self._should_yield())
-                    ):
+                    if self._must_yield(ops, resuming, yielding):
                         yielding = True
                         self.yield_now(cur, automatic=True)
                         break
                     resuming = False
                     cur = cur._eval(self)  # pyright: ignore[reportPrivateUsage]
-                except Exception as e:  # a bug in user code, a combinator, or a dispatcher
-                    cur = Failure(Cause.die(e))
+                except BaseException as error:
+                    cur = self._failure_for_exception(error)
         finally:
             self.running = was_running
-        # Parked while an interrupt was waiting (it arrived during register): deliver it now.
-        if self._deferred and self.interruptible and self._parked is not None:
-            self._interrupt_now()
+
+    def _must_yield(self, ops: int, resuming: bool, yielding: bool) -> bool:
+        return (
+            ops >= self._yield_at
+            and not resuming
+            and not yielding
+            and (not self._ask_scheduler or self._should_yield())
+        )
+
+    def _record_fatal(self, cur: AnyEffect) -> None:
+        if isinstance(cur, Failure):
+            for defect in cur.cause.defects:
+                if isinstance(defect, (KeyboardInterrupt, SystemExit)):
+                    self._fatal = defect
+
+    def _failure_for_exception(self, error: BaseException) -> Failure[Any]:
+        if isinstance(error, asyncio.CancelledError):
+            return Failure(Cause.interrupt())
+        if isinstance(error, (KeyboardInterrupt, SystemExit)):
+            self._fatal = error
+        return Failure(Cause.die(error))
 
     def _should_yield(self) -> bool:
         assert self._scheduler is not None
@@ -317,6 +398,25 @@ class Fiber(Generic[A_co, E_co]):
 
     def _park(self, park: Park) -> None:
         self._parked = park
+
+    def resume_async(self, park: Park, eff: AnyEffect) -> None:
+        """Marshal to the owning loop before claiming the registration's Park."""
+        owner = self._loop
+        if owner is not None:
+            try:
+                current = asyncio.get_running_loop()
+            except RuntimeError:
+                current = None
+            if current is not owner:
+                owner.call_soon_threadsafe(self.resume_async, park, eff)
+                return
+        if park.done:
+            return
+        park.done = True
+        if park.registering:
+            park.sync = eff
+        else:
+            self.evaluate(eff)
 
     # -- interruption ------------------------------------------------------------------------------
 
@@ -371,13 +471,36 @@ class Fiber(Generic[A_co, E_co]):
         return _await_all(live)
 
     def _publish(self, exit_: Exit[Any, Any]) -> None:
+        if self._exit is not None:
+            return
         self._exit = exit_
         if self._parent is not None:  # cleared before observers run (internal/effect.ts:652-655)
             self._parent.children.discard(self)
             self._parent = None
         observers, self._observers = self._observers, []
         for cb in observers:
+            self._notify_observer(cb, exit_)
+
+    def _notify_observer(self, cb: Observer, exit_: Exit[Any, Any]) -> None:
+        try:
             cb(exit_)
+        except BaseException as error:
+            if isinstance(error, (KeyboardInterrupt, SystemExit)):
+                self._fatal = error
+            elif self._loop is not None:
+                try:
+                    self._loop.call_exception_handler(
+                        {
+                            "message": "peffect fiber observer failed",
+                            "exception": error,
+                            "fiber": self,
+                        }
+                    )
+                except BaseException as reporting_error:
+                    if self._fatal is None:
+                        self._fatal = reporting_error
+            else:
+                raise
 
     @property
     def exit(self) -> Exit[A_co, E_co] | None:
@@ -392,7 +515,10 @@ class Fiber(Generic[A_co, E_co]):
     def add_observer(self, cb: Observer) -> Callable[[], None]:
         """Call cb with the exit when the fiber is done (now, if it is). Returns remove()."""
         if self._exit is not None:
-            cb(self._exit)
+            self._notify_observer(cb, self._exit)
+            if self._fatal is not None:
+                fatal, self._fatal = self._fatal, None
+                raise fatal
             return lambda: None
         self._observers.append(cb)
         return lambda: self._observers.remove(cb) if cb in self._observers else None

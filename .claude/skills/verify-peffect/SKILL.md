@@ -58,3 +58,35 @@ which pytest removes. Keep the evidence directory; delete old runs under `<base>
 
 [features/README.md](features/README.md) lists what this skill covers and how each feature is
 driven.
+
+## Select deeper checks
+
+The full run remains required for every change. Ruff must run as `uv run ruff check .`,
+not just on changed files. Its owned Python scope includes source, tests, type fixtures,
+examples and scripts; vendor, generated/ignored files and the pinned TLC chart helper follow
+`pyproject.toml` exclusions. A pass does not mean those excluded files were linted.
+
+| Changed contract | Additional verification |
+| --- | --- |
+| Wake, cancellation, queue or runtime lifecycle | Run the existing kernel/queue property and interleaving suites below; preserve minimized failing schedules as regressions. |
+| Kernel protocol | Read and run `../verify-formal-kernel/SKILL.md`, including its Update requirements. |
+| Child completion or its regression assertions | Run `../verify-mutations/SKILL.md`. |
+| Public signature, generic variance, service/error channel | Add positive and negative cases to `typetests/`; `tests/test_types.py` runs in the full suite. Exercise changed public behavior through a consumer example. |
+| Context/resource ownership | Extend weak-reference/cleanup assertions in `tests/test_runtime_hardening.py` or the relevant lifecycle suite; distinguish retained handles from leaks. |
+| Performance claim | Use repeated measurements of the actual workload and record environment/baseline. No general performance gate exists yet. |
+
+```sh
+uv run pytest -q tests/test_kernel_props.py tests/test_queue_props.py tests/test_queue_interleavings.py tests/test_managed_runtime_interleavings.py tests/test_runtime_hardening.py
+# Optional longer generated search; retain the seed/reproducer if it fails:
+uv run pytest -q tests/test_kernel_props.py tests/test_queue_props.py --hypothesis-profile=deep
+uv run python examples/queue_worker.py
+```
+
+The default generated suites already run in pytest. Use the deep profile for a wider search,
+not as evidence that every schedule has been explored. The model abstracts context and values;
+runtime tests cover selected concrete histories. Lint/types cannot prove callback ownership,
+API usability, useful comments, or that every remaining file is needed.
+
+For cleanup, identify callers, public exports, packaging and documentation references before
+removing code. Keep a deletion decision in `untangle-log.md`; unused imports are mechanically
+caught, while unreferenced public APIs may still have external consumers.

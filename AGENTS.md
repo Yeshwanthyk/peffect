@@ -131,3 +131,33 @@ source map and edge cases: `docs/QUEUE_SOURCE_MAP.md`; invariants Q1-Q10, lesson
   integer capacity (or unbounded) in applications; counts are normalized by the primitive.
 - Completion payload unions type-check as `Done[X | Y]`; Pyright's exclusion inference for
   `Done[X] | Done[Y]` can retain a Done member even though runtime filtering removes both.
+
+
+## Enforced Python quality
+
+Run `uv run ruff check .` and `uv run pyright`; both run in the full verifier and
+in `.github/workflows/quality.yml` on pushes and pull requests.
+
+| Rule | Enforcement |
+| --- | --- |
+| Remove casts that do not change the inferred type | Pyright `reportUnnecessaryCast` |
+| No duplicate class fields or enum values, useless container-factory lambdas, or repeated prefix/suffix calls | Ruff PIE794, PIE796, PIE807, PIE810 |
+| No duplicate parametrized test cases or literal assertions that always fail/pass accidentally | Ruff PT014, PT015, PLW0129 and existing F631 |
+| Use specific `noqa` codes; remove unused suppressions | Ruff PGH004 and existing RUF100 |
+| Write slots as a collection, with stable ordering | Ruff PLC0205 and existing RUF023 |
+| Respect the kernel boundary and pipe typing contracts | `check_boundaries.py` and `test_pipe_signatures.py` |
+
+Slots/final, identity versus value equality, keyword-only API changes, exception policies,
+and comment/test usefulness require caller and behavior evidence. Do not apply them as blanket
+style rules. Tests may inspect kernel internals; `@gen` bodies remain unannotated for inference.
+
+## Verification skills by change
+
+| Change | Read and run |
+| --- | --- |
+| Any repository change | [.claude/skills/verify-peffect/SKILL.md](.claude/skills/verify-peffect/SKILL.md); lint the full owned tree with `uv run ruff check .` |
+| Fiber/Async/Failure/masking protocol | [.claude/skills/verify-formal-kernel/SKILL.md](.claude/skills/verify-formal-kernel/SKILL.md), including Update |
+| Child completion or its regression test | [.claude/skills/verify-mutations/SKILL.md](.claude/skills/verify-mutations/SKILL.md) |
+
+The library verifier's deeper-check table routes concurrency, type/API, retention and
+performance work. A skill is the runbook; its executable tests and scripts provide evidence.

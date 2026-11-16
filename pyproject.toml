@@ -26,6 +26,8 @@ target-version = "py313"
 extend-exclude = ["vendor", ".claude/skills/*/tlc_chart.py"]  # tlc_chart.py: pinned copy of the invariants skill tool
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "RUF", "ANN"]
+# Mechanical quality rules; ownership and public API choices remain review decisions.
+extend-select = ["PGH004", "PLC0205", "PLW0129", "PT014", "PT015", "PIE794", "PIE796", "PIE807", "PIE810"]
 ignore = ["ANN401"]
 [tool.ruff.lint.per-file-ignores]
 # @gen bodies stay unannotated so pyright infers Effect[A, E, R].
@@ -43,6 +45,7 @@ ignore = ["ANN401"]
 include = ["src", "tests", "scripts", "examples", "typetests/should_pass.py", "typetests/declared.py"]
 exclude = ["vendor"]
 typeCheckingMode = "strict"
+reportUnnecessaryCast = "error"
 venvPath = "."
 venv = ".venv"
 pythonVersion = "3.13"

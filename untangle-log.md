@@ -228,3 +228,170 @@ mutations: `/Users/yesh/.t3/scratch/2026-11-15-what-if-we-wanted-to-20120c4d/wor
 - Fixed independent review P2: normal pytest required a global Harrow executable. Pin harrow-code==0.4.1 in the development lock; the source gate passes with PATH limited to .venv/bin and system directories.
 - Removed the superseded prototypes/pfx tracked tree after confirming no runtime/verifier imports. DESIGN now links its historical commit.
 - Core imports neither Pydantic nor pydantic-settings. Pydantic is retained in development dependencies for examples/type fixtures; settings belonged only to the removed prototype. Published runtime has no external dependencies.
+
+## Fresh library quality pass (2026-11-16, after runtime hardening)
+
+This section audits the current working tree, including the uncommitted runtime-hardening
+changes. Older sections are historical decisions, not proof for this pass. The user selected
+both optional untangle extras: comments and tests. Scope is maintainability; correctness
+claims and final verifier results are recorded separately below.
+
+### Problems found before edits
+
+- Surplus, `option.py:36-41`: `_key` exists only to expose `Some.value` as `object` for
+  heterogeneous equality. The generic comparison can use both read-only values directly if
+  pyright accepts it; preserve custom equality and `Some(None)` behavior.
+- Surplus, `context.py:188`: `isinstance(other, Context)` already narrows `other` before the
+  equality comparison. Its `cast(Context[Any], other)` may be unnecessary.
+- Hidden state shape, `queue.py:200-212,250-282`: the private registry and five fixed-field
+  records accept arbitrary instance attributes despite owning fixed protocol state. `_Batch`,
+  `_Taker`, and `_Active` must remain mutable; `_Done` must remain frozen. This is distinct
+  from Queue's public capability bases and their extension contract.
+- Needless equality, `queue.py:250-277`: mutable offers, takers and active state inherit
+  dataclass structural equality even though registration and cancellation use tokens and
+  identity. Disable generated equality on those four records; keep `_Done` value equality.
+- Needless equality, `testing/_clock.py:81-87`: `_WakeTracker` owns a mutable pending count and
+  one idle callback; no caller compares tracker values. Disable generated equality so its
+  semantics remain identity-based like `_Sleep` at `:74-78`.
+- Surplus comments, `latch.py:52-53,111-113`: source-line-only docstrings communicate neither
+  behavior nor ordering. Retain `latch.py:73-82`'s swap-before-reentry explanation.
+- Surplus comments, `deferred.py:33-39,81-90`: several method docstrings restate the method
+  name or signature. Retain the class-level stored-effect and `done_unsafe` publication contract.
+- Readability, `ref.py:111-114`: chained assignment combines publication and the returned value
+  in one expression; separate the two without changing the callback's single evaluation.
+- Surplus comments, `ref.py:42-44`, `synchronized_ref.py:39-42`,
+  `semaphore.py:82-85,235-237`, `scope.py:146-149`, `managed_runtime.py:320-322`, and
+  `logger.py:149-150`: source-only or signature-restating docstrings do not communicate a
+  contract. Preserve `SynchronizedRef.get`'s unlocked-read statement and Scope's reentry rules.
+- Unsound test, `tests/test_option.py:31`: unequal values may legally have equal hashes.
+  `:25,32` assert Python `None` against itself; `:35-44` test Python `is`/`isinstance`
+  spellings rather than peffect behavior. Keep the equal-values hash invariant and test
+  heterogeneous and custom `Some` equality directly.
+- Weak test, `tests/test_option.py:68-70`: a failed `Some` pattern match falls through and
+  cannot fail the test. Add an explicit unmatched branch, while keeping immutability checks.
+- Duplicated test signal, `tests/test_option.py:53-56`: once `Some(None)` is shown to be a
+  `Some`, `is not None` adds no independent check. Keep the payload assertion.
+- Hidden test dependency, `tests/test_cleanup_parity.py:473-485`: its white-box Queue offset
+  witness read the private `_Batch` through `vars(entry)`, assuming it had a `__dict__`.
+  Read `entry.offset` directly so it still observes publication with a slotted record.
+- Inventory guardrail, `scripts/complexity-policy.json:17`: removing `Some._key` deliberately
+  changes the function inventory. Update that hash from current Harrow output only; numeric
+  and callback-family limits remain unchanged.
+- Duplicated signal, `tests/test_duration_upstream.py:372`: hashing the same singleton twice
+  adds no distinct coverage beyond the finite cross-representation hash and set checks in the
+  same test. Remove that assertion only.
+
+### Design and preservation checks before edits
+
+- `option.py:15-18,20-42`: keep the custom immutable covariance design; a frozen dataclass
+  would change the type relation. Direct equality has to preserve heterogeneous `Some` values.
+- `context.py:122-125,134-145,174-180`: exact builtin numbers, coinductive containers, and
+  empty-context union casts are different contracts. Only the post-`isinstance` cast is a
+  removal candidate. The old log's claim of duplicate float guards is stale.
+- `latch.py:26-39` remains positional: Python tests and upstream `Latch.make(false)` use that
+  API. A keyword-only migration would break compatibility for style alone.
+- `queue.py:303-319` already makes optional `capacity` and `strategy` keyword-only; it has no
+  positional-option migration to do. `_Registry.__iter__` handles live mutation and must not
+  become a copied snapshot. `_Active` and `_Done` remain distinct terminal states.
+- `ref.py:29-47` and `synchronized_ref.py:35-54` follow upstream synchronous `makeUnsafe` /
+  effectful `make` and an unlocked synchronized read. Their public delegation methods are
+  required operations, not removable wrappers. `synchronized_ref.py:93-98` owns permit-time
+  reads and shared writes; it is not a spare helper.
+- `scope.py:55-92,132-165`, `layer.py:659-747`, `fiber.py:139-170`, and
+  `semaphore.py:95-174` have distinct callback ownership and exception policies. Do not merge
+  their callback families merely to reduce lexical depth or metrics.
+
+### Pending coverage and proof
+
+Finish the module-by-module inventory, comment/test signal audit, focused checks, and final
+verifiers on the resulting tree. Report any retained special cases with their callers.
+
+### Current-source module coverage and design decisions
+
+The inventory covered all 26 Python source files (including both `testing` implementations):
+class/state shape, catches, casts, imports, comments, and their concrete callers were scanned
+on this tree. Relevant callback bodies and public factories were read at the locations below.
+
+| Modules | Current ownership and disposition |
+| --- | --- |
+| `__init__.py`, `testing/__init__.py` | Public exports, used by examples/tests; no orphan export or file removal justified. |
+| `cause.py`, `core.py`, `fiber.py` | Kernel exits, generator cleanup, Park tokens and independent interrupt/yield flags retain the hardening design. No protocol edit or new suppression in this pass. `fiber.py:139-170,473-503,938-963` distinguishes scheduler/observer reporting from user-code defects. |
+| `context.py`, `option.py` | Remove one post-narrowing cast and one single-use helper; keep exact-number/coinductive comparison and immutable covariance. The direct `Some` comparison uses a local `Some[object]` cast because pyright otherwise infers `Unknown`. |
+| `deferred.py`, `latch.py`, `semaphore.py`, `queue.py` | Keep distinct completion detach, latch swap/queued flush, permit recheck and live queue registry contracts. Queue's private records now express fixed fields and mutable identity. Public Queue capabilities remain extension bases. |
+| `scope.py`, `resources.py`, `layer.py`, `managed_runtime.py` | Scope state classes and Layer memo entry already use slots; their finalizer/build callbacks own different phases. `resources.py:27-34` cast discharges provided R at capture time; `managed_runtime.py:315-317` `_flatten` is a typed `Exit` adapter. Neither is dead code. |
+| `ref.py`, `synchronized_ref.py` | The plain cell is one sync step; synchronized pure/effectful writes have different permit paths. Public delegation methods correspond to upstream Ref and SynchronizedRef operations. Removed one chained assignment and restating comments; kept unlocked `get` documented. |
+| `duration.py`, `clock.py`, `scheduler.py`, `timeout.py` | Duration's four variants already are frozen, slotted and final; Clock/Scheduler are service extension points, and timeout preserves Clock substitution. Numeric normalization and timer branches remain upstream behavior. |
+| `console.py`, `logger.py`, `testing/_console.py` | Service protocols remain extensible; concrete live/test log and console owners already have slots. Logger deduplication and service context are behavioral contracts; removed only a source-only marker. |
+| `pull.py`, `testing/_clock.py` | Pull's Done filters/overloads distinguish completion from defects; TestClock's sleeper identity is required by list removal. Wake tracker is a mutable identity record, so it no longer generates equality. |
+
+Across the selected source paths, every catch is explicit: `core.py` and `scope.py` catch
+`BaseException` for defect/interrupt conversion while unwinding; `fiber.py` separates callback
+reporting from iterator/worker `Exception` conversion; `deferred.py` catches only a missing
+callback during unregister; `duration.py` catches only overflow. No catch-all was added.
+The three live scripts under `scripts/`, parity examples and existing docs remain referenced
+by the verifier or repository documentation; the independent research draft is untouched.
+No file or directory has replacement/no-consumer evidence sufficient for deletion.
+
+The confirmed avoidable local special-case count is **1 → 0**: the unnecessary
+`Context.__eq__` cast after an `isinstance` check. Eight reviewed cases remain for specific
+contracts: exact numbers, recursive equality, empty-context union typing, raw Queue NaN
+capacity, normalized Queue counts, Latch's positional upstream API, Deferred first completion,
+and TestClock sleeper identity. This is a bounded inventory, not a count of every branch in
+the interpreter. The two surplus coordination layers removed are `Some._key` and generated
+equality on mutable private queue/wake records; neither changed the public API.
+
+### Applied changes and final evidence
+
+- `option.py`: removed `_key`; direct value comparison retains heterogeneous and custom
+  equality with an explicit cast at the runtime-narrowed boundary. `context.py`: removed the
+  genuinely redundant equality cast. `ref.py`: split compute, publish and return into three
+  statements. Pyright accepts each without a new ignore.
+- `queue.py`: `_Registry` and its five private records have fixed slots. Four mutable records
+  no longer generate structural equality; `_Done` remains frozen and gains slots. `testing/_clock.py`
+  gives its mutable `_WakeTracker` identity equality, matching its ownership. No wake order,
+  terminal state or public class construction changed.
+- Removed source-only/restating docstrings in Deferred, Latch, Ref, SynchronizedRef, Semaphore,
+  Scope, ManagedRuntime and Logger. Preserved publication, ordering, reentry, type-system and
+  upstream behavior explanations.
+- `tests/test_option.py`: removed two Python-operator tests, an unsupported unequal-hash
+  assertion and redundant `None` checks; added heterogeneous/custom equality and a failing
+  unmatched pattern branch. `tests/test_duration_upstream.py` dropped one duplicate singleton
+  hash assertion. `tests/test_cleanup_parity.py` now observes the slotted batch's offset
+  directly, preserving its real runtime/JS publication comparison. Ref, Latch, Semaphore and
+  runtime-hardening regressions were retained as behavior checks.
+- `scripts/complexity-policy.json`: changed only Option's function-inventory hash after the
+  `_key` removal. All numeric and callback-family ceilings remain as before this pass.
+
+The first full verifier exposed the `vars(entry)` white-box assumption and the deliberate
+Option inventory mismatch; both were corrected. Fresh final verifier:
+`/tmp/peffect-quality-final/20261116T173747Z-57106/summary.txt` (all steps exit 0;
+947 tests pass, one pre-existing TestClock collection warning; 21/21 parity scenarios match).
+The actual queue-worker CLI output is `/tmp/peffect-quality-queue-worker.txt` (producer drain,
+worker interruption, producer failure and resource close). The native complexity gate passed
+at `/tmp/peffect-quality-complexity/`; the delegated diff gate passed at
+`/tmp/peffect-quality-delegated-gate.txt`. `git diff --check` exited 0.
+
+No fiber/Async/Failure/masking protocol code changed in this quality pass. For the combined
+working tree, the fresh formal main result is `/tmp/peffect-quality-formal-main.txt`:
+2857 states, depth 24, every rule holds, 24 linked tests pass. Every one of the eight
+`/tmp/peffect-quality-Break_*.txt` configurations exited 1 with a named invariant or
+deadlock broken. An isolated copy of `fiber.py` with the `_done` wait removed made the linked
+runtime test fail (Success instead of Interrupt) at
+`/tmp/peffect-quality-mutation-7fhlww_z/result.txt`; production files were not mutated.
+Pillow is not installed, so its optional `--new-since` check was not run.
+
+Limits: the formal model is bounded to two fibers and abstracts causes, Context and Queue
+contents; their runtime checks remain in the full verifier. The scan found no defensible
+whole-file or directory deletion. The existing independent research draft and all prior
+runtime-hardening edits remain intact. No commit, push or vendor edit was made.
+
+
+## Documentation consolidation — 2026-11-16
+
+Removed the ten raw `docs/scouts` reports and eight raw ROI scout transcripts.
+Implemented decisions remain in DESIGN/INVARIANTS; future-porting constraints are
+consolidated in `docs/UPSTREAM_PLANNING.md`. Detailed source readings remain accessible
+at commit ee3433082c61bc2159a65edf1a5b0d26146584a6 through historical links.
+The ROI synthesis and visualizations, runtime-hardening checkpoint, and protected
+core-patterns draft remain. Updated DESIGN wake-depth wording and labeled stale ROI
+packaging/Queue status. Vendor remains the pinned parity reference.

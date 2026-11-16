@@ -1,7 +1,7 @@
 # peffect — Effect-style primitives for Python, rebuilt from the kernel up
 
-v2 of this doc: revised against Effect v4.1.4 (`vendor/effect-v4`, commit 289a53f) using the scout
-notes in `docs/scouts/*.md`. Citations are `src/<path>:<line>` inside the vendored package.
+v2 of this doc: revised against Effect v4.1.4 (`vendor/effect-v4`, commit 289a53f) using source inspection consolidated in
+[upstream planning](UPSTREAM_PLANNING.md). Citations are `src/<path>:<line>` inside the vendored package.
 
 ## 0. Usage first (what callers write)
 
@@ -32,8 +32,8 @@ yield from task().pipe(retry(exponential(0.1).pipe(up_to(5))))   # SCHEDULE: eff
 An Effect is a node the fiber's run loop evaluates. Evaluating a node returns the next node, so
 composition never becomes Python recursion. Matches `internal/effect.ts:673-770` (run loop).
 Wakes do nest: a resume or interrupt runs the woken fiber inside the caller's step, as upstream
-does (`effect.ts:605-611`, `:1220-1226`), so a deep chain of synchronous wakes is bounded by
-Python's recursion limit (INVARIANTS SC7, measured).
+does (`effect.ts:605-611`, `:1220-1226`), with a loop-local depth guard that defers deep chains through fresh Park tokens
+(INVARIANTS SC7).
 
 | node | evaluates to | v4 |
 |---|---|---|
@@ -113,18 +113,18 @@ interpreter state, not host-language exceptions.
 `shield` detaches instead of deferring, failures can't carry a Cause, every combinator nests a
 Python frame.
 
-## 5. Changes from v1 of this doc (from the scouts)
+## 5. Changes from v1 of this doc
 
-1. One `OnExit(eff, ok, err)` node → three frame kinds plus `on_any`. (kernel.md)
-2. `Mask(eff)` node → fiber flag + `SetInterruptible` restore frame. (kernel.md)
-3. Added `Suspend` and `YieldNow`. (kernel.md)
-4. `Cause` tree (`Then`/`Both`) → flat reason tuple. (cause-exit.md)
-5. Supervision is `fork` (child) vs `fork_daemon` vs `fork_in(scope)`. (fibers.md)
-6. MemoMap needs Deferred + per-entry Scope + refcount; the v1 prototype ([archived v1 prototype](https://github.com/Yeshwanthyk/peffect/tree/f76c30475b2c3e19f0409f60dca43c73e3c4037a/prototypes/pfx)) used a dict memo, which is racy. (layer-scope.md)
-7. `Schema[A, I, R]` → `Codec[T, I, RD, RE]`. (schema.md)
-8. Schedule step may be effectful; combinators are `min`/`max`/`concat`. (schedule-clock.md)
-9. Added `Reference` (default-valued tag) for Clock, log level, tracer. (context.md)
-10. `TaggedError` yieldable. (config-data.md)
+1. One `OnExit(eff, ok, err)` node → three frame kinds plus `on_any`.
+2. `Mask(eff)` node → fiber flag + `SetInterruptible` restore frame.
+3. Added `Suspend` and `YieldNow`.
+4. `Cause` tree (`Then`/`Both`) → flat reason tuple.
+5. Supervision is `fork` (child) vs `fork_daemon` vs `fork_in(scope)`.
+6. MemoMap needs Deferred + per-entry Scope + refcount; the v1 prototype ([archived v1 prototype](https://github.com/Yeshwanthyk/peffect/tree/f76c30475b2c3e19f0409f60dca43c73e3c4037a/prototypes/pfx)) used a dict memo, which is racy.
+7. `Schema[A, I, R]` → `Codec[T, I, RD, RE]`.
+8. Schedule step may be effectful; combinators are `min`/`max`/`concat`.
+9. Added `Reference` (default-valued tag) for Clock, log level, tracer.
+10. `TaggedError` yieldable.
 
 ## 6. Types (carried over from v1, already proven in the v1 prototype, [archived v1 prototype](https://github.com/Yeshwanthyk/peffect/tree/f76c30475b2c3e19f0409f60dca43c73e3c4037a/prototypes/pfx))
 

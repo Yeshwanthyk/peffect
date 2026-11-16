@@ -185,7 +185,7 @@ class Context(Generic[T_contra]):
         Values use identity, NaN and recursive container equality, then Python object equality."""
         if not isinstance(other, Context):
             return False
-        mine, theirs = self.services, cast(Context[Any], other).services
+        mine, theirs = self.services, other.services
         return len(mine) == len(theirs) and all(
             k in theirs and _equal_values(v, theirs[k], set()) for k, v in mine.items()
         )

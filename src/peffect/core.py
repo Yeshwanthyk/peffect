@@ -588,13 +588,7 @@ class Async(Effect[A_co, E_co, R_co]):
         park = Park()
 
         def resume(eff: Effect[A_co, E_co, R_co]) -> None:
-            if park.done:
-                return
-            park.done = True
-            if park.registering:
-                park.sync = eff  # resumed before register returned: no need to park
-            else:
-                fiber.evaluate(eff)  # runs the fiber now, before resume returns
+            fiber.resume_async(park, eff)
 
         cancel = self.register(resume)
         park.registering = False
@@ -745,8 +739,9 @@ class OnExit(Effect[A_co, E_co, R_co], Frame):
     def _finalizer(self, exit_: Exit[Any, Any], fiber: AnyFiber) -> AnyEffect | None:
         try:
             return self.f(exit_, fiber)
-        except Exception as e:  # f raised instead of returning: a defect of the finalizer
-            return Failure(Cause.die(e))
+        except BaseException as e:  # f raised instead of returning: a defect of the finalizer
+            cause = Cause.interrupt() if isinstance(e, asyncio.CancelledError) else Cause.die(e)
+            return Failure(cause)
 
     def on_ok(self, value: Any, fiber: AnyFiber) -> AnyEffect | None:
         exit_ = Success(value)
@@ -885,7 +880,7 @@ class GenFrame(Effect[Any, Any, Any], Frame):
         if not ok:
             try:
                 self.gen.close()
-            except Exception as e:  # the body's cleanup failed: handled next, masked like OnExit
+            except BaseException as e:  # cleanup defect, masked like OnExit
                 _mask_while_popping(fiber)
                 fiber.stack.append(_CloseFailed(e))
         return None
@@ -900,11 +895,16 @@ class _CloseFailed(Frame):
     __slots__ = ("defect",)
     kind = ERR
 
-    def __init__(self, defect: Exception) -> None:
+    def __init__(self, defect: BaseException) -> None:
         self.defect = defect
 
     def on_err(self, cause: Cause[Any], fiber: AnyFiber) -> AnyEffect | None:
-        return Failure((cause + Cause.die(self.defect)).elect_defects())
+        cleanup = (
+            Cause.interrupt()
+            if isinstance(self.defect, asyncio.CancelledError)
+            else Cause.die(self.defect)
+        )
+        return Failure((cause + cleanup).elect_defects())
 
 
 # ================================================================================================
@@ -1168,9 +1168,9 @@ class catch_tag[X, B, E2, R2]:
     def __call__(self, eff: AnyEffect) -> AnyEffect:
         def on_err(cause: Cause[Any]) -> AnyEffect:
             if not cause.defects:
-                for e in cause.failures:
-                    if isinstance(e, self.cls):
-                        return self.handler(e)
+                failures = cause.failures
+                if failures and isinstance(failures[0], self.cls):
+                    return self.handler(failures[0])
             return Failure(cause)
 
         return OnFailure(eff, on_err)

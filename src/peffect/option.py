@@ -7,7 +7,7 @@ distinguishable from no result. Only construction, the value and structural equa
 
 from __future__ import annotations
 
-from typing import final
+from typing import cast, final
 
 
 @final
@@ -33,12 +33,8 @@ class Some[A]:
     def __delattr__(self, name: str) -> None:
         raise AttributeError(f"Some is immutable: cannot delete {name!r}")
 
-    def _key(self) -> object:
-        """The value as `object`: comparable across differently parameterized Somes."""
-        return self._value
-
     def __eq__(self, other: object) -> bool:
-        return isinstance(other, Some) and bool(self._key() == other._key())
+        return isinstance(other, Some) and bool(self.value == cast(Some[object], other).value)
 
     def __hash__(self) -> int:
         return hash((Some, self._value))

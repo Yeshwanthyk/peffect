@@ -1,5 +1,9 @@
 # Highest-ROI additions after Queue
 
+> Historical snapshot: Queue has since shipped. Current `pyproject.toml` has no runtime
+> dependencies; Pydantic is development-only and pydantic-settings is not required.
+> Preserve the source comparisons below as dated evidence, not current package status.
+
 Research date: 2026-11-15 Toronto / 2026-11-16 UTC. Lead: Astra medium. Eight completed, bounded, read-only Codex GPT-6 Luna high scouts. **Recommendation: finish the already-owned Queue release, then implement a small faithful Schedule/retry/repeat slice and prove it in a real-I/O worker app.**
 
 ## Scope and current-state correction
@@ -241,7 +245,7 @@ Pydantic and pydantic-settings are **currently mandatory runtime dependencies**,
 
 ## Evidence coverage and reconciliation
 
-Eight Codex Luna high result files are retained: [primitive APIs](./scout-1.md), [Schedule](./scout-2.md), [cached resources](./scout-3.md), [data flow](./scout-4.md), [Config/validation](./scout-5.md), [Python integration](./scout-6.md), [app ergonomics](./scout-7.md), [ecosystem breadth](./scout-8.md). Every completed child thread was read. Earlier dispatches were interrupted during the user's provider correction; none supplies conclusions here.
+Eight raw Codex Luna high result files are archived in Git history: [primitive APIs](https://github.com/Yeshwanthyk/peffect/tree/ee3433082c61bc2159a65edf1a5b0d26146584a6/docs/research/2026-11-15-roi/scout-1.md), [Schedule](https://github.com/Yeshwanthyk/peffect/tree/ee3433082c61bc2159a65edf1a5b0d26146584a6/docs/research/2026-11-15-roi/scout-2.md), [cached resources](https://github.com/Yeshwanthyk/peffect/tree/ee3433082c61bc2159a65edf1a5b0d26146584a6/docs/research/2026-11-15-roi/scout-3.md), [data flow](https://github.com/Yeshwanthyk/peffect/tree/ee3433082c61bc2159a65edf1a5b0d26146584a6/docs/research/2026-11-15-roi/scout-4.md), [Config/validation](https://github.com/Yeshwanthyk/peffect/tree/ee3433082c61bc2159a65edf1a5b0d26146584a6/docs/research/2026-11-15-roi/scout-5.md), [Python integration](https://github.com/Yeshwanthyk/peffect/tree/ee3433082c61bc2159a65edf1a5b0d26146584a6/docs/research/2026-11-15-roi/scout-6.md), [app ergonomics](https://github.com/Yeshwanthyk/peffect/tree/ee3433082c61bc2159a65edf1a5b0d26146584a6/docs/research/2026-11-15-roi/scout-7.md), [ecosystem breadth](https://github.com/Yeshwanthyk/peffect/tree/ee3433082c61bc2159a65edf1a5b0d26146584a6/docs/research/2026-11-15-roi/scout-8.md). Every completed child thread was read. Earlier dispatches were interrupted during the user's provider correction; none supplies conclusions here.
 
 The lead independently read the decisive Schedule/Pull/recovery, awaitable/host cancellation, Cache entry, ScopedRef replacement, Pool waiter/TTL, RcMap get/release, Config/provider/default, Queue atomic-take and Stream/SubscriptionRef paths. This corrected three misleading implications: Pool does not universally need Queue; ScopedRef does not swap before release; Cache is not simply Deferred + map. It also removed Queue from the “new work” ranking after reconciling the parent's live thread.
 

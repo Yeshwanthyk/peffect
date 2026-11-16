@@ -472,9 +472,9 @@ async def test_queue_batch_offset_is_published_before_producer_resume():
     """White-box publication witness on both real runtimes, not a new public API promise."""
     q = await run(Queue[int, Never].bounded(0))
     observed: list[int] = []
-    entry: object
+    entry: Any
     producer = run_fork(
-        q.offer_all([1, 2]).flat_map(lambda _: sync(lambda: observed.append(vars(entry)["offset"])))
+        q.offer_all([1, 2]).flat_map(lambda _: sync(lambda: observed.append(entry.offset)))
     )
     # Inspect the actual entry's publication, like Queue.state.offers in the JS witness.
     entry = next(iter(vars(q)["_state"].offers))[1]

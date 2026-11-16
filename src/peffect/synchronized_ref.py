@@ -38,7 +38,6 @@ class SynchronizedRef[A]:
 
     @classmethod
     def make_unsafe(cls, value: A) -> SynchronizedRef[A]:
-        """SynchronizedRef.ts makeUnsafe."""
         return cls(value)
 
     @classmethod

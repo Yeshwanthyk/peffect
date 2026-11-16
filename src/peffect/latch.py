@@ -50,7 +50,6 @@ class Latch:
         return succeed(True)
 
     def _flush_scheduled(self) -> None:
-        """:5952-5959."""
         waiters, self.scheduled = self.scheduled, None
         for resume in waiters or ():
             resume(succeed(None))
@@ -109,7 +108,6 @@ class Latch:
         return True
 
     def close(self) -> Effect[bool, Never, Never]:
-        """:6006."""
         return sync(self.close_unsafe)
 
     def when_open[A, E, R](self, eff: Effect[A, E, R]) -> Effect[A, E, R]:
