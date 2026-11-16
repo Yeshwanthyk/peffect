@@ -376,6 +376,32 @@ and independently verified by Sol 6.1.
   coverage.
 - Layer is not in the formal model, and the kernel is unchanged.
 
+## Racing and timeouts
+
+Pinned `internal/effect.ts:1688-1840` (raceAll, raceAllFirst, interruptRaceLosers, race,
+raceFirst) and `:3929-4007, :6499` (timeoutOrElse, timeout, timeoutOption, TimeoutError). The
+race state machine is `_race` in `fiber.py`, beside `for_each`, for the same B3 reason: it needs
+`_start`, `add_observer` and `interrupt_unsafe`. `timeout.py` is non-kernel and composes
+`race_first` with `sleep`. Data-first only.
+
+| # | Invariant | Enforced by | Pinned by |
+|---|---|---|---|
+| RA1 | **Racers are daemons, started at once, always interruptible, in the caller's context.** | `_start(None, eff, parent.context, parent, True, True)` | `test_source_racers_see_the_callers_context_and_run_as_daemons`, `test_source_a_masked_race_still_interrupts_its_loser_and_finishes_first`, :2268, :2281; mask mutation (detected as a deadlock, see UPSTREAM_TESTS) |
+| RA2 | **Winner mode.** `race`/`race_all`: first success wins; `race_first`/`race_all_first`: first exit wins. | `first_exit or isinstance(exit_, Success)` | :1430, :1455, property `test_source_race_matches_the_model_for_any_mix_and_completion_order`; both winner-mode mutations |
+| RA3 | **All failed: reasons in completion order, defects elected.** | `failures` appended by observers; `Cause(...).elect_defects()` when `settled >= total` | :1449, the property; order mutation |
+| RA4 | **A racer that settles the race while racers start stops later forks.** `race_all` checks after each fork (it read the iterable first); `race_all_first` checks before each fork and reads lazily. | the two `break`s; `list(effects)` only for `race_all`; close lazy iterator on early break | :1534, :1552, the property, `test_source_how_far_each_race_reads_a_lazy_iterable`; both cutoff mutations and the eager-iteration mutation; `test_race_review_regressions.py` pins cleanup and a throwing close |
+| RA5 | **The winner resumes the race before losers are interrupted**, by the racing fiber's id, so a loser's interrupt cannot settle the race. | `win`: `resume` then `interrupt_unsafe(parent.id)` | :1475, :1494, :1513, :1572; loser-interrupt and order mutations |
+| RA6 | **The race returns only after live losers are interrupted and awaited, masked.** An external interrupt interrupts every racer. | `OnExit(Async(register), cleanup)`, `cleanup` = `interrupt_all(live)` | `test_source_the_race_returns_after_loser_cleanup_and_masks_that_wait`, `test_source_interrupting_the_racing_fiber_interrupts_every_racer`; await mutation |
+| RA7 | **`timeout_or_else` calls `or_else` lazily, on the caller's fiber, after the source stopped.** | `flat_map(choose)` over `timeout_option` | :2054-:2209, `..._external_interruption_stops_a_pending_fallback`; eager-fallback mutation |
+| RA8 | **`timeout` decodes its duration when called and fails with a fresh `TimeoutError("Operation timed out after '<format>'")`.** `timeout_option`/`timeout_or_else` decode when run. | `from_input_unsafe` in `timeout`; `Duration.format` port | :2289, :2304, :2317, `test_source_invalid_durations_fail_where_upstream_decodes_them`, `test_duration_format_upstream.py` |
+| RA9 | **Typed channels join**: one type variable per channel, so pyright widens A, E and R to both sides' unions (`Never` with `Never` stays `Never`); `timeout` adds `TimeoutError`, `timeout_option` wraps in `Option`. | signatures | typetests `race_types`, `timeout_types`; should_fail 106-113 |
+
+**Formal coverage.** The race adds no kernel transition: it reuses `_start`, observers, `Async`
+resume, `OnExit` and `interrupt_all`, and writes none of the modeled fields. Racers are
+parentless daemons, outside the model's parent/child scope. The modeled protocol (park, wake,
+interrupt, mask) is proven by `verify-formal-kernel`; the race's own ordering (RA1-RA8) is
+proven only by runtime tests, the 966-run vendor-replayed property model and the mutations.
+
 ## Coordination and composition
 
 Latch and Semaphore follow the pinned implementations using public primitives. Their runtime

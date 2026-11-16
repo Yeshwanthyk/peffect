@@ -28,9 +28,8 @@ What upstream does, and these tests pin:
   "Operation timed out after '<Duration.format>'" and decodes its Duration when called.
 
 Adaptations used throughout:
-- The API isn't built yet. Each combinator is looked up on `peffect` when the test runs (the
-  tests/test_testclock.py precedent), so every test fails with AttributeError instead of the file
-  failing to import. Lookups become imports once the exports land.
+- Data-first only: `race(a, b)`, `timeout(eff, d)`, `timeout_or_else(eff, duration=, or_else=)`;
+  upstream's pipeable (data-last) forms are not ported.
 - TestClock isn't built. Where upstream uses it, the program gets a provided `GateClock`: a real
   ClockService whose `sleep` records the Duration it was given and parks on a Deferred the test
   opens; as TestClock.sleep (TestClock.ts:329-332), a sleep of at most 0 ms ends at once.
@@ -47,14 +46,13 @@ Adaptations used throughout:
 """
 
 import asyncio
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from typing import Any, Literal, Never
 
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-import peffect
 import peffect.duration as D
 from peffect import (
     Cause,
@@ -75,6 +73,7 @@ from peffect import (
     Some,
     Success,
     Tag,
+    TimeoutError,
     die,
     ensuring,
     exit_,
@@ -87,6 +86,10 @@ from peffect import (
     on_exit,
     on_interrupt,
     provide,
+    race,
+    race_all,
+    race_all_first,
+    race_first,
     run,
     run_fork,
     sleep,
@@ -94,57 +97,17 @@ from peffect import (
     suspend,
     sync,
     tap,
+    timeout,
+    timeout_option,
+    timeout_or_else,
     uninterruptible,
     yield_now,
 )
 from peffect.core import WithFiber
-from peffect.duration import Duration, Input
+from peffect.duration import Duration
 from peffect.fiber import Task
 
 WATCHDOG_SECONDS = 2
-
-# -- the API under test, looked up when a test runs ------------------------------------------------
-
-
-def _upcoming() -> Any:
-    """peffect itself: each name below is an AttributeError until it is exported."""
-    upcoming: Any = peffect
-    return upcoming
-
-
-def race[A, E, R](self: Effect[A, E, R], that: Effect[A, E, R]) -> Effect[A, E, R]:
-    return _upcoming().race(self, that)
-
-
-def race_first[A, E, R](self: Effect[A, E, R], that: Effect[A, E, R]) -> Effect[A, E, R]:
-    return _upcoming().race_first(self, that)
-
-
-def race_all[A, E, R](effects: Iterable[Effect[A, E, R]]) -> Effect[A, E, R]:
-    return _upcoming().race_all(effects)
-
-
-def race_all_first[A, E, R](effects: Iterable[Effect[A, E, R]]) -> Effect[A, E, R]:
-    return _upcoming().race_all_first(effects)
-
-
-def timeout_or_else[A, E, R](
-    self: Effect[A, E, R], *, duration: Input, or_else: Callable[[], Effect[A, E, R]]
-) -> Effect[A, E, R]:
-    return _upcoming().timeout_or_else(self, duration=duration, or_else=or_else)
-
-
-def timeout_option[A, E, R](self: Effect[A, E, R], duration: Input) -> Effect[Option[A], E, R]:
-    return _upcoming().timeout_option(self, duration)
-
-
-def timeout[A, E, R](self: Effect[A, E, R], duration: Input) -> Effect[A, E | Exception, R]:
-    return _upcoming().timeout(self, duration)
-
-
-def timeout_error_type() -> type[Exception]:
-    return _upcoming().TimeoutError
-
 
 type Combinator = Callable[[Effect[Any, Any, Any], Effect[Any, Any, Any]], Effect[Any, Any, Any]]
 BOTH: list[tuple[str, Combinator]] = [("race", race), ("race_first", race_first)]
@@ -286,7 +249,8 @@ async def test_race_all():
 async def test_race_all_elects_typed_failures_when_all_racers_fail_and_one_dies():
     """Effect.test.ts:1449."""
     exit = await guarded(exit_(race_all([fail("error"), fail_cause(Cause[str]((Die("defect"),)))])))
-    assert exit == Failure(Cause[str]((Die("error"), Die("defect"))))
+    assert isinstance(exit, Failure)  # Failure compares by identity; its Cause by value
+    assert exit.cause == Cause[str]((Die("error"), Die("defect")))
 
 
 async def test_race_all_first():
@@ -724,6 +688,40 @@ async def test_source_racers_see_the_callers_context_and_run_as_daemons():
     assert result == (("outer", True, "inner"), "outer")
 
 
+@pytest.mark.parametrize(
+    ("name", "combinator", "first", "pulled", "expected"),
+    [
+        ("race_all", race_all, succeed(1), [0, 1, 2], [("ok", 1)]),
+        ("race_all_first", race_all_first, succeed(1), [0, 1], [("ok", 1)]),
+        ("race_all_first", race_all_first, fail("e"), [0, 1], [("fail", "e")]),
+    ],
+)
+async def test_source_how_far_each_race_reads_a_lazy_iterable(
+    name: str,
+    combinator: Callable[[Any], Effect[int, str, Never]],
+    first: Effect[int, str, Never],
+    pulled: list[int],
+    expected: list[tuple[str, object]],
+) -> None:
+    """Source-derived: raceAll reads every racer first (Arr.fromIterable, :1707); raceAllFirst
+    reads lazily and checks `done` before each fork (:1763-1764), so when the first racer settles
+    synchronously the generator is resumed once more but nothing after it is forked. Measured
+    under bun (scratch probe race-probe/p3.ts): pulled [0, 1, 2] / [0, 1] / [0, 1], ran []."""
+    log: list[int] = []
+    ran: list[int] = []
+
+    def racers():
+        log.append(0)
+        yield first
+        log.append(1)
+        yield sync(lambda: ran.append(1) or 2)
+        log.append(2)
+        yield succeed(3)
+
+    ex = await guarded(exit_(combinator(racers())))
+    assert (log, ran, reasons(ex)) == (pulled, [], expected), name
+
+
 # == timeout_or_else: upstream ports ===============================================================
 
 
@@ -976,7 +974,7 @@ def timeout_error(ex: Exit[Any, Any]) -> Exception:
     errors = ex.cause.failures
     assert len(errors) == 1 and len(ex.cause.reasons) == 1, ex
     error = errors[0]
-    assert isinstance(error, timeout_error_type()), error
+    assert isinstance(error, TimeoutError), error
     assert type(error).__name__ == "TimeoutError"
     return error
 

@@ -31,9 +31,16 @@ from peffect import (
     gen,
     provide,
     provide_layer,
+    race,
+    race_all,
+    race_all_first,
+    race_first,
     scoped,
     succeed,
     sync,
+    timeout,
+    timeout_option,
+    timeout_or_else,
 )
 from peffect.option import Option, Some
 from peffect.scheduler import MaxOpsBeforeYield, MixedScheduler, SchedulerService, with_dispatcher
@@ -549,3 +556,44 @@ def layer_pipe_mistakes(base: PipeLayerType) -> None:
         layer_identity,
         layer_identity,
     )
+
+
+class RaceA(Tag[str], key="snip/RaceA"): ...
+
+
+class RaceB(Tag[int], key="snip/RaceB"): ...
+
+
+class RaceErrA(Exception): ...
+
+
+class RaceErrB(Exception): ...
+
+
+def race_left() -> Effect[int, RaceErrA, RaceA]:
+    return fail(RaceErrA())
+
+
+def race_right() -> Effect[str, RaceErrB, RaceB]:
+    return fail(RaceErrB())
+
+
+async def race_and_timeout_mistakes() -> None:
+    # 106. RACE_VALUE_LOST: the joined value keeps the right side's str
+    _value: Effect[int, RaceErrA | RaceErrB, RaceA | RaceB] = race(race_left(), race_right())
+    # 107. RACE_ERROR_LOST: the joined error keeps the right side's RaceErrB
+    _error: Effect[int | str, RaceErrA, RaceA | RaceB] = race_first(race_left(), race_right())
+    # 108. RACE_REQUIREMENT_LOST: the joined requirements keep RaceB
+    _needs: Effect[int | str, RaceErrA | RaceErrB, RaceA] = race_all([race_left(), race_right()])
+    # 109. RACE_ALL_FIRST_UNHANDLED: run needs every racer's error handled and service provided
+    await peffect.run(race_all_first([race_left(), race_right()]))
+    # 110. TIMEOUT_ERROR_LOST: timeout adds TimeoutError to the error channel
+    _timed: Effect[int, RaceErrA, RaceA] = timeout(race_left(), 10)
+    # 111. TIMEOUT_OPTION_UNWRAPPED: timeout_option yields an Option, not the bare value
+    _bare: Effect[int, RaceErrA, RaceA] = timeout_option(race_left(), 10)
+    # 112. TIMEOUT_OR_ELSE_FALLBACK_LOST: the fallback's value, error and service join the result
+    _fallback: Effect[int, RaceErrA, RaceA] = timeout_or_else(
+        race_left(), duration=10, or_else=race_right
+    )
+    # 113. TIMEOUT_OR_ELSE_EAGER: or_else is a thunk, not an effect
+    timeout_or_else(race_left(), duration=10, or_else=race_right())

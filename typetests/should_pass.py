@@ -25,6 +25,7 @@ from peffect import (
     Scope,
     ScopeService,
     Tag,
+    TimeoutError,
     acquire_release,
     acquire_use_release,
     add_finalizer,
@@ -42,16 +43,24 @@ from peffect import (
     fork_daemon,
     gen,
     interrupt_all,
+    never,
     on_error,
     on_exit,
     on_interrupt,
     provide,
     provide_layer,
+    race,
+    race_all,
+    race_all_first,
+    race_first,
     scoped,
     sleep,
     succeed,
     sync,
     tap,
+    timeout,
+    timeout_option,
+    timeout_or_else,
 )
 from peffect import scope as current_scope  # Effect.scope
 from peffect.duration import Duration, seconds
@@ -597,4 +606,58 @@ def layer_pipe_types(base: PipeLayerType, c: Layer[PipeLayerC]) -> None:
             layer_identity,
         ),
         PipeLayerType,
+    )
+
+
+# --- racing and timeouts: one type variable per channel joins both sides ---
+
+
+class RaceA(Tag[str], key="typetests/RaceA"): ...
+
+
+class RaceB(Tag[int], key="typetests/RaceB"): ...
+
+
+class RaceErrA(Exception): ...
+
+
+class RaceErrB(Exception): ...
+
+
+def race_left() -> Effect[int, RaceErrA, RaceA]:
+    return fail(RaceErrA())
+
+
+def race_right() -> Effect[str, RaceErrB, RaceB]:
+    return fail(RaceErrB())
+
+
+def race_pure() -> Effect[bytes, Never, Never]:
+    return succeed(b"")
+
+
+type RaceJoined = Effect[int | str, RaceErrA | RaceErrB, RaceA | RaceB]
+
+
+def race_types() -> None:
+    assert_type(race(race_left(), race_right()), RaceJoined)
+    assert_type(race_first(race_left(), race_right()), RaceJoined)
+    assert_type(race_all([race_left(), race_right()]), RaceJoined)
+    assert_type(race_all_first((race_left(), race_right())), RaceJoined)
+    assert_type(race(race_pure(), race_pure()), Effect[bytes, Never, Never])
+    assert_type(race(race_pure(), race_left()), Effect[bytes | int, RaceErrA, RaceA])
+    assert_type(race(never, never), Effect[Never, Never, Never])
+
+
+def timeout_types() -> None:
+    assert_type(timeout_option(race_left(), "1 second"), Effect[Option[int], RaceErrA, RaceA])
+    assert_type(timeout(race_left(), 10), Effect[int, RaceErrA | TimeoutError, RaceA])
+    assert_type(timeout(race_pure(), 10), Effect[bytes, TimeoutError, Never])
+    assert_type(
+        timeout_or_else(race_left(), duration=10, or_else=race_right),
+        Effect[int | str, RaceErrA | RaceErrB, RaceA | RaceB],
+    )
+    assert_type(
+        timeout_or_else(race_pure(), duration=10, or_else=lambda: succeed(1)),
+        Effect[bytes | int, Never, Never],
     )

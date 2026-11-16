@@ -30,6 +30,7 @@ from peffect.core import (
     Exit,
     Failure,
     Frame,
+    OnExit,
     Park,
     Resume,
     Success,
@@ -814,6 +815,105 @@ def _for_each_concurrent[A, B, E, R](
     return go()
 
 
+# ================================================================================================
+# Racing
+# ================================================================================================
+
+
+def race_all[A, E, R](effects: Iterable[Effect[A, E, R]]) -> Effect[A, E, R]:
+    """Run every effect at once; continue with the first success. If all fail, fail with every
+    reason in completion order, defects elected. The rest are interrupted as soon as one wins.
+    Effect v4: raceAll, internal/effect.ts:1688-1740."""
+    return _race(effects, first_exit=False)
+
+
+def race_all_first[A, E, R](effects: Iterable[Effect[A, E, R]]) -> Effect[A, E, R]:
+    """Run every effect at once; continue as the first one ends, success or failure.
+    Effect v4: raceAllFirst, internal/effect.ts:1743-1774."""
+    return _race(effects, first_exit=True)
+
+
+def race[A, E, R](self: Effect[A, E, R], that: Effect[A, E, R]) -> Effect[A, E, R]:
+    """``race_all([self, that])``: the first success wins (internal/effect.ts:1794).
+
+    One type variable per channel: pyright joins both sides' types into a union per channel."""
+    return race_all((self, that))
+
+
+def race_first[A, E, R](self: Effect[A, E, R], that: Effect[A, E, R]) -> Effect[A, E, R]:
+    """``race_all_first([self, that])``: the first exit wins (internal/effect.ts:1834)."""
+    return race_all_first((self, that))
+
+
+def _race[A, E, R](effects: Iterable[Effect[A, E, R]], *, first_exit: bool) -> Effect[A, E, R]:
+    """The shared body of raceAll / raceAllFirst.
+
+    Racers are daemons started at once, interruptible whatever the caller's mask, in the
+    caller's context (forkUnsafe(parent, eff, true, true, false), :5614). An OnExit frame under
+    the race interrupts and awaits whatever racers are still live when the race ends, masked,
+    so the race returns only after its losers' cleanup (:1704). The winner is resumed before
+    the losers are interrupted, so a loser's interrupt can't settle the race (:1776-1786). A
+    racer that settles the race while the racers start stops later ones from being forked."""
+
+    def go(parent: Fiber[Any, Any]) -> Effect[A, E, R]:
+        fibers: dict[Fiber[A, E], None] = {}  # live racers in fork order
+
+        def cleanup(_exit: Exit[Any, Any], _fiber: Fiber[Any, Any]) -> AnyEffect | None:
+            return interrupt_all(list(fibers)) if fibers else None
+
+        def register(resume: Resume[A, E, R]) -> None:
+            racers: Iterable[Effect[A, E, R]] = effects  # raceAllFirst reads lazily
+            total = 0
+            if not first_exit:
+                racers = listed = list(effects)  # raceAll reads all first (Arr.fromIterable)
+                total = len(listed)
+            settled = 0
+            done = False
+            failures: list[Cause[E]] = []
+
+            def win(exit_: Exit[A, E]) -> None:
+                nonlocal done
+                winner = not done
+                done = True
+                resume(exit_)
+                if winner:
+                    for loser in list(fibers):
+                        loser.interrupt_unsafe(parent.id)
+
+            def observe(fiber: Fiber[A, E]) -> Observer:
+                def on_exit(exit_: Exit[A, E]) -> None:
+                    nonlocal settled
+                    fibers.pop(fiber, None)
+                    settled += 1
+                    if first_exit or isinstance(exit_, Success):
+                        win(exit_)
+                        return
+                    failures.append(exit_.cause)
+                    if settled >= total:
+                        reasons = tuple(r for c in failures for r in c.reasons)
+                        resume(Failure(Cause(reasons).elect_defects()))
+
+                return on_exit
+
+            iterator = iter(racers)
+            for eff in iterator:
+                if first_exit and done:
+                    # JS for-of closes the iterator on break (IteratorClose).
+                    close = getattr(iterator, "close", None)
+                    if close is not None:
+                        close()
+                    break
+                fiber = _start(None, eff, parent.context, parent, True, True)
+                fibers[fiber] = None
+                fiber.add_observer(observe(fiber))
+                if done and not first_exit:  # raceAllFirst checks before the fork instead
+                    break
+
+        return OnExit(Async(register), cleanup)
+
+    return WithFiber(go)
+
+
 type FiberStartHook = Callable[[Fiber[Any, Any]], object]
 
 
@@ -913,6 +1013,10 @@ __all__ = [
     "fork_daemon",
     "fork_in_owner",
     "interrupt_all",
+    "race",
+    "race_all",
+    "race_all_first",
+    "race_first",
     "run",
     "run_exit",
     "run_fork",

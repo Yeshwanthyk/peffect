@@ -62,6 +62,10 @@ from peffect.fiber import (
     fork_daemon,
     fork_in_owner,
     interrupt_all,
+    race,
+    race_all,
+    race_all_first,
+    race_first,
     run,
     run_exit,
     run_fork,
@@ -76,6 +80,7 @@ from peffect.resources import acquire_release, acquire_use_release, add_finalize
 from peffect.scheduler import MaxOpsBeforeYield, PreventSchedulerYield, Scheduler
 from peffect.scope import Closeable, Scope, ScopeService, fork_in, run_in, scope, scoped
 from peffect.semaphore import Semaphore
+from peffect.timeout import TimeoutError, timeout, timeout_option, timeout_or_else
 
 __all__ = [
     "DEFAULT_SCHEDULER",
@@ -119,6 +124,7 @@ __all__ = [
     "Some",
     "Success",
     "Tag",
+    "TimeoutError",
     "acquire_release",
     "acquire_use_release",
     "add_finalizer",
@@ -155,6 +161,10 @@ __all__ = [
     "on_interrupt",
     "provide",
     "provide_layer",
+    "race",
+    "race_all",
+    "race_all_first",
+    "race_first",
     "run",
     "run_exit",
     "run_fork",
@@ -168,6 +178,9 @@ __all__ = [
     "suspend",
     "sync",
     "tap",
+    "timeout",
+    "timeout_option",
+    "timeout_or_else",
     "uninterruptible",
     "uninterruptible_mask",
     "update_context",

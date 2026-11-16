@@ -14,6 +14,7 @@ import math
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Final, Literal, Never, final, overload
 
 
@@ -446,3 +447,51 @@ def subtract(self: Duration, that: Duration) -> Duration:
         lambda s, t: _from_bigint(s - t),
         _subtract_infinities,
     )
+
+
+# --- format (Duration.ts:1789-1895) ---------------------------------------------------------
+
+
+def _js_integer_string(n: int) -> str:
+    """JS `${Number(n)}` for a whole count: digits below 1e21, then exponent notation (repr's
+    shortest round-trip form, e.g. `1e+21`), and `Infinity` past the double range."""
+    x = _number(n)
+    if math.isinf(x):
+        return "Infinity" if x > 0 else "-Infinity"
+    # Expand the shortest round-trip decimal, not the exact binary integer.
+    return f"{Decimal(repr(x)):f}".removesuffix(".0") if abs(x) < 1e21 else repr(x)
+
+
+def format(self: Duration) -> str:
+    """``2d 6h``, ``1s 500ms``, ``1ms 500000ns``; ``0``, ``Infinity``, ``-Infinity``. The
+    nanosecond piece is what is left below a millisecond (upstream `parts`)."""
+    match self.value:
+        case Infinity():
+            return "Infinity"
+        case NegativeInfinity():
+            return "-Infinity"
+        case _:
+            pass
+    if is_zero(self):
+        return "0"
+    n = to_nanos_unsafe(self)
+    if n < 0:
+        return "-" + format(_from_bigint(-n))
+    ms, nanos_part = divmod(n, 1_000_000)
+    sec, ms_part = divmod(ms, 1_000)
+    mins, sec_part = divmod(sec, 60)
+    hrs, min_part = divmod(mins, 60)
+    days, hr_part = divmod(hrs, 24)
+    pieces = [
+        f"{_js_integer_string(value)}{unit}"
+        for value, unit in (
+            (days, "d"),
+            (hr_part, "h"),
+            (min_part, "m"),
+            (sec_part, "s"),
+            (ms_part, "ms"),
+            (nanos_part, "ns"),
+        )
+        if value != 0
+    ]
+    return " ".join(pieces)

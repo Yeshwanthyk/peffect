@@ -51,7 +51,7 @@ increment, not a claim that the full runtime or its fidelity gaps are complete.
 | 3 | Ref, SynchronizedRef | Ref.ts (765) | `ref.py` | plain cell; Sync | — |
 | 3 | Semaphore | Semaphore.ts (696) | `semaphore.py` | waiter list + `Async` | prop: permits never negative, never above max, under random interrupts |
 | 3 | Queue (bounded, dropping, sliding) | Queue.ts (2,175) | `queue.py` | two waiter lists | prop: no item lost or duplicated when takers are interrupted |
-| 3 | `all_`, `for_each(concurrency=)`, `race`, `timeout`, FiberSet | effect.ts | `concurrent.py` | fork + observers + Semaphore + Clock | prop: losers interrupted and awaited before the result (K8 for combinators) |
+| 3 (part ✓) | `all_`, `for_each(concurrency=)` ✓, `race` ✓, `timeout` ✓, FiberSet | effect.ts | `concurrent.py` | fork + observers + Semaphore + Clock | prop: losers interrupted and awaited before the result (K8 for combinators) |
 | 4 | Layer, MemoMap, ManagedRuntime | Layer.ts (2,856), ManagedRuntime.ts (474) | `layer.py`, `runtime.py` | Context + Scope + Deferred | a shared layer builds once; release in reverse; typetests on `Layer[ROut, E, RIn]` |
 | 5 | Duration, Schedule, `retry`, `repeat` | Schedule.ts (1,583) | `schedule.py` | Clock + `sleep` | TestClock: recorded delays match the schedule exactly |
 | 6 | TaggedError, Codec over pydantic, Config | Schema.ts (19,389), Config.ts (1,630) | `codec.py`, `config.py` | pydantic `TypeAdapter`; issues from `ValidationError` | round-trip props: `decode(encode(x)) == x` |
@@ -118,6 +118,17 @@ an AGENTS.md section with the idiom and the mistakes it prevents.
   12 Effect.test.ts ports and 5 labelled source-derived tests (21 cases) pass. No `discard` and no ambient
   concurrency yet. Independently verified by Sol 6.1 after ordered-worker and primitive cancellation
   corrections; 185 tests pass excluding TestClock. Not formally modeled.
+
+- Racing and timeouts (2026-11-15): implemented; independent review completed,
+  iterator-close and large-duration formatting findings corrected with regressions.
+  - `fiber.py`: `race`, `race_first`, `race_all`, `race_all_first` (raceAll/raceAllFirst,
+    `internal/effect.ts:1688-1840`), one shared `_race` state machine beside `for_each`.
+  - `timeout.py`: `timeout`, `timeout_option`, `timeout_or_else`, `TimeoutError` (:3929-4007, :6499),
+    built from `race_first` and `sleep`. `duration.py`: `format` (Duration.ts:1789-1895).
+  - 35 race/timeout cases (21 Effect.test.ts ports, source cases, a vendor-replayed property) and
+    44 format cases pass; typetests `race_types`/`timeout_types`, should_fail 106-113. Rows RA1-RA9.
+  - Data-first only. Not formally modeled: the race reuses kernel primitives without a new
+    transition; its ordering is proven by runtime tests and mutations.
 
 - Layer (2026-11-15): implemented and independently verified by Sol 6.1.
   - `layer.py`: `Layer[ROut, E, RIn]` (token-only constructor, `Final` builder), `MemoMap`,

@@ -234,6 +234,50 @@ from a looked-up accessor to the public import with every test body AST-identica
 original interrupt before elected cancellation failures; upstream runtime replay and focused
 recheck passed. Traversal is not formally modeled.
 
+## Racing and timeouts — `tests/test_race_timeout_upstream.py`, `tests/test_duration_format_upstream.py`
+
+`Effect.test.ts` ports: :1430 raceAll, :1449 raceAll elects, :1455 raceAllFirst, :1475 :1494
+:1513 loser interrupts, :1534 :1552 :1572 while starting and pending loser, :2054 :2105 :2119
+:2158 :2209 timeoutOrElse, :2244 :2253 :2268 :2281 timeoutOption, :2289 :2304 :2317 timeout.
+`test_source_*` cases were measured against the pinned vendor under bun; the property oracle
+`race_model` reproduced all 966 vendor runs (n ≤ 3, every sync/gated and ok/fail/die mix and gate
+order). TestClock adaptation: a provided `GateClock` whose sleeps park on gates the test opens.
+Data-first only; no pipe forms.
+
+The first 32 cases were committed red (ad754c8), reading upcoming names through a lookup helper. The
+implementation replaced the helpers with typed imports; every behavioral assertion is kept. One
+assertion compared two `Failure` objects, which compare by identity, so it could never pass; it
+now checks `isinstance(exit, Failure)` and compares the causes by value.
+
+`Duration.format` tests were independently verified red against the base checkout (not committed red): Duration.test.ts :497-507 and :740-742, plus 42
+source cases (zero forms, fractional millis, exact nanos, negatives, infinities, days beyond
+1e21 and beyond the double range, the timeout inputs), each expected string printed by the pinned
+`Duration.format` under bun.
+
+Independent review found early-exit generator cleanup and large-day decimal formatting gaps.
+Both are corrected and pinned in `test_race_review_regressions.py`; the three reviewer
+reproductions were observed red, then green. `race_all_first` calls the iterator's `close()`
+on early break, matching JavaScript IteratorClose; formatting expands the shortest decimal
+instead of the exact binary integer. The remaining review found no actionable issue.
+
+Not ported: pipeable forms, spans/logging, the
+TestClock-only breadth (`Effect.delay` timing, clock adjustment variants).
+
+One source case was added after the implementation because a scratch mutation survived the
+ports: `test_source_how_far_each_race_reads_a_lazy_iterable` (raceAll reads every racer first;
+raceAllFirst reads lazily and forks nothing after a synchronous winner; bun probe p3.ts).
+
+Scratch mutations, each in a temp copy of `src/` first on `PYTHONPATH`, against both test files:
+winner mode (race_all as first-exit, race_all_first as first-success), failures in reverse
+completion order, no start cutoff (race_all and race_all_first separately), losers not interrupted
+when the race settles, losers not awaited (no OnExit cleanup), losers interrupted before the
+winner resumes, race_all_first reading its iterable eagerly, and an eager timeout fallback: each
+fails named tests. Racers inheriting the caller's mask deadlocks
+`test_source_a_masked_race_still_interrupts_its_loser_and_finishes_first`: the uninterruptible
+`never` loser can never be interrupted, and the `wait_for` hang guard cannot fire, because
+cancelling `run` waits for the masked root. It is detected as a hang (pytest killed at 60 s,
+faulthandler dump at 10 s), not as an assertion failure.
+
 ## Layer — `tests/test_layer_upstream.py`
 
 `Layer.test.ts` ports:

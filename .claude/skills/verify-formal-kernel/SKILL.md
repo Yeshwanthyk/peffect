@@ -32,7 +32,18 @@ Why the model's pass still means something with them added (an argument, not a c
 nor holds back an interrupt, and the model's "the interrupt unwinds to the top" still describes
 the code.
 
-**Sync:** 2026-11-16, composition/dispatcher correction: no model change. OnExit receives the
+**Sync:** 2026-11-15, racing and timeouts unit: no model change. `_race` (fiber.py) and
+`timeout.py` add no transition: racers start through `_start` as parentless daemons (not
+modeled), the race parks through `Async`, settles through observers, and cleans up in an `OnExit`
+frame with `interrupt_all`; none writes `_deferred`, `_parked`, `Park.done`, `_exit`, `children`
+or another fiber's `interruptible`. 2232 states, depth 21, every configured rule holds; all seven
+`Break_*.cfg` exit 1. The scratch `_done` break (`if not live:` forced true in a temp copy first on
+`PYTHONPATH`) fails three linked tests through `run.sh`; `fiber.py`'s hash was unchanged. Race
+ordering (winner mode, completion-order failures, start cutoff, interruptible racers, loser
+interrupt and await, lazy fallback) is proven by `tests/test_race_timeout_upstream.py` and
+scratch mutations, not here.
+
+Previous Sync, 2026-11-16, composition/dispatcher correction: no model change. OnExit receives the
 running fiber; its mask and cause combination are unchanged. The author measured 2232 states,
 depth 21, 24 linked tests passing and all seven break configurations exiting 1. A scratch
 no-mask mutation fails linked runtime tests. GenFrame cause composition and coordination
